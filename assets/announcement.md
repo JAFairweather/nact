@@ -44,6 +44,7 @@ handle exists.
 
 ## Tags to include
 
-- `t` tags: `nostr`, `nostrdev`, `ai`, `agents`
+- `t` tags: `nostrdev`, `ai`, `agents` — never a plain `nostr` tag (tagging the
+  platform you're posting on reads like `#twitter` on Twitter)
 - Consider p-tagging maintainers of NIP-46 signers / awesome-nostr when replying
   in-thread, not in the primary note (avoid spammy mentions).
