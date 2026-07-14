@@ -139,6 +139,14 @@ and the **NIP-59 nostr-DM adapter** are now built (see `DESIGN.md` and
 `examples/`) — the nostr-native path is here, not just designed. Next: a
 persisted pending store and multi-approver quorum.
 
+## Contributing & community
+
+nact is small on purpose — most contributions slot into an **approval adapter**
+or a **signer** without touching the trust-critical core. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the seams and ground rules, and
+[`COMMUNITY.md`](COMMUNITY.md) for where nact is headed in the nostr ecosystem
+and how to help it get there.
+
 ---
 
 Part of the [Nave](https://nave.pub) ecosystem · a nave.pub project
