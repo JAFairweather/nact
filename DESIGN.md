@@ -89,3 +89,70 @@ key — no bot account, no platform, entirely inside nostr.
 - **nact** governs the agent's *outputs* (signature-gated actions).
 - Together: **scoped autonomy** — an agent bounded on both what it may perceive
   and what it may do.
+
+## Two directions the primitive wants to grow
+
+These aren't built yet — they're the design's natural next moves, recorded so we
+build toward them deliberately.
+
+### Credentials as scopes — nvoy carries more than data
+
+The NIP-DA mechanism (an encrypted **scope**, a gift-wrapped **grant**, live
+dereference, revocation-by-key-rotation) isn't limited to documents. The same
+wire can carry a **credential** — an OAuth token, an API key, a session — into
+an agent flow:
+
+- A **broker** authenticates to an OAuth provider, obtains a token, and delivers
+  it to the agent *as a scoped grant*: end-to-end encrypted to the agent's key,
+  so the broker's server holds the data no longer than it takes to hand it over.
+- It's **live** — the broker refreshes the token in place; the agent always
+  dereferences the current one, never a stale copy pasted into its prompt.
+- It's **severable** — rotate the grant's key and the agent's use of the
+  credential dies instantly. That's a delegatee-level revocation OAuth itself
+  doesn't give you.
+- It's **scoped** — the grant carries exactly the one credential the flow needs.
+
+A credential is higher-value than ordinary data, so this pairs naturally with
+nact's approval gate (a human *enacts* the granting of a credential) and short
+TTLs. Net effect: an agent gets **use** of a credential for a bounded flow
+without that credential entering its long-term storage, its logs, or its model
+context.
+
+### Requests that are grants and enacts at once — the loop closes
+
+So far the roles are fixed: grants flow human→agent (perceive), actions flow
+agent→(human enacts)→world (act). But an agent can **initiate** a scoped-data
+request from a *named provider*, and that single request is two things at once:
+
+1. a **scoped grant** — the agent grants the provider scoped, revocable access
+   to the request itself (the query, the context the provider needs), and
+2. an **enact request** — it asks the provider to *act*: assemble the data,
+   decide whether to approve, and return it.
+
+The provider, on approval, assembles the result and returns it as **another
+scope** — a grant back to the agent:
+
+```
+  agent    → [ request = grant(params) + enact-request ] → provider
+  provider → [ approve + assemble ]                      → agent
+  provider → [ response = grant(data) ]                  → agent
+```
+
+This is where **nvoy and nact turn out to be one primitive seen from two
+sides**: a *data request is an action* (nact-shaped — proposed, approved,
+fulfilled), and *fulfilling it produces a grant* (nvoy-shaped — scoped, live,
+revocable). The provider's "approval" is exactly an **enact** — a signature
+authorizing the assembly-and-return. And because the reply is a scope, the
+provider keeps revocation power over what it returned: rotate the response
+grant's key and the agent's copy stops opening.
+
+What it buys:
+
+- **Providers become first-class** — named and discoverable over NIP-05, able to
+  publish which scopes they'll fulfill and on what terms.
+- **Composition** — an agent chains: request from provider A, then use A's
+  returned scope as a param-grant in a request to provider B, with revocation
+  propagating along the chain.
+- **Symmetry** — the same event shapes serve human→agent and agent→provider;
+  only the roles rotate. Perceive and act stop being separate systems and become
+  two directions of the same signed, scoped exchange.
