@@ -1,16 +1,28 @@
 // nact — the enactment pipeline: propose an action, a human enacts it by
 // signing, then it broadcasts. The agent proposes; it never holds the key
 // that authorizes. Generalized from the Nave ecosystem's Luke agent.
+//
+// Two axes of pluggability:
+//   • the APPROVAL adapter decides how a human is asked and how they answer
+//     (Telegram today; a NIP-59 gift-wrapped nostr DM is the native path).
+//   • the SIGNER decides where the authorizing key lives — custodial (nsec on
+//     this host, your explicit choice) or NIP-46 (a remote bunker; the key
+//     stays on your device and nact never sees it).
 
-import { finalizeEvent, getPublicKey, nip19 } from 'nostr-tools'
+import { nip19 } from 'nostr-tools'
 import { SimplePool } from 'nostr-tools/pool'
 import { randomBytes } from 'node:crypto'
+import { custodialSigner } from './signers/custodial.mjs'
+import { nip46Signer } from './signers/nip46.mjs'
 
 export class Nact {
-  // identities: { name: { nsec } }  — role keys the agent may act AS.
-  // relays:     string[]            — where enacted events publish.
-  // approval:   an adapter (see adapters/telegram.mjs) implementing
-  //             { send, parseDecision, isApprover, ack }.
+  // identities: { name: cfg } where cfg is one of
+  //     { nsec }            — custodial signer (key on this host)
+  //     { bunker,           — NIP-46 remote signer (key on your device)
+  //       clientSecret? }
+  //     { signer }          — any object with async publicKey()/sign()/close()
+  // relays:   string[]      — where enacted events publish.
+  // approval: an adapter implementing { send, parseDecision, isApprover, ack }.
   constructor({ identities = {}, relays = [], approval, ttlMs = 36 * 3600 * 1000 } = {}) {
     if (!approval) throw new Error('nact: an approval adapter is required')
     this.approval = approval
@@ -20,20 +32,32 @@ export class Nact {
     this.pending = new Map()          // id → { identity, draft, created }
     this.identities = {}
     for (const [name, cfg] of Object.entries(identities)) {
-      const sk = loadSecret(cfg?.nsec)
-      if (!sk) { console.warn(`nact: identity '${name}' has no usable nsec — skipped`); continue }
-      const pk = getPublicKey(sk)
-      this.identities[name] = { sk, pk, npub: nip19.npubEncode(pk) }
+      const signer = resolveSigner(cfg)
+      if (!signer) { console.warn(`nact: identity '${name}' has no usable signer — skipped`); continue }
+      // pk/npub resolve lazily: a NIP-46 bunker isn't reachable until first use,
+      // so we don't block construction on a network round-trip.
+      this.identities[name] = { signer, pk: null, npub: null }
     }
   }
 
   identityNames() { return Object.keys(this.identities) }
 
+  // Resolve (and cache) an identity's pubkey/npub, connecting the signer if
+  // this is a remote bunker's first use.
+  async _resolve(name) {
+    const idn = this.identities[name]
+    if (!idn) throw new Error(`nact: unknown identity '${name}'`)
+    if (!idn.pk) {
+      idn.pk = await idn.signer.publicKey()
+      idn.npub = nip19.npubEncode(idn.pk)
+    }
+    return idn
+  }
+
   // Propose an action. `event` is an unsigned template: { kind, content, tags }.
   // `context` is shown to the human to inform the decision; it is NOT published.
   async propose({ identity, event, context, replyTo } = {}) {
-    const idn = this.identities[identity]
-    if (!idn) throw new Error(`nact: unknown identity '${identity}'`)
+    const idn = await this._resolve(identity)
     if (!event || typeof event.kind !== 'number') throw new Error('nact: event.kind is required')
     this._gc()
     const id = randomBytes(6).toString('base64url')
@@ -48,14 +72,14 @@ export class Nact {
 
   // Feed the raw approval-channel payload (e.g. a Telegram webhook body).
   async handleCallback(raw) {
-    const decision = this.approval.parseDecision(raw)   // { id, verb, approver } | null
+    const decision = await this.approval.parseDecision(raw)   // { id, verb, approver } | null
     if (!decision) return { handled: false }
     return this.enact(decision)
   }
 
   // Enact a decision: verify the human, then sign + broadcast (or discard).
   async enact({ id, verb, approver } = {}) {
-    if (!this.approval.isApprover(approver)) {
+    if (!(await this.approval.isApprover(approver))) {
       await this.approval.ack({ id, result: { error: 'not authorized' } })
       return { enacted: false, why: 'not authorized' }
     }
@@ -64,8 +88,17 @@ export class Nact {
     this.pending.delete(id)
     if (verb !== 'ok') { await this.approval.ack({ id, result: { rejected: true } }); return { enacted: false, why: 'rejected' } }
 
-    const { sk } = this.identities[p.identity]
-    const signed = finalizeEvent({ ...p.draft, created_at: Math.floor(Date.now() / 1000) }, sk)
+    const idn = await this._resolve(p.identity)
+    const unsigned = { ...p.draft, pubkey: idn.pk, created_at: Math.floor(Date.now() / 1000) }
+    let signed
+    try {
+      signed = await idn.signer.sign(unsigned)
+    } catch (e) {
+      // A NIP-46 bunker can decline or time out — that's a legitimate second
+      // veto, not a crash. Report it back through the same ack channel.
+      await this.approval.ack({ id, result: { error: `signer: ${e?.message || 'declined'}` } })
+      return { enacted: false, why: 'signer declined' }
+    }
     const results = await Promise.allSettled(this.pool.publish(this.relays, signed))
     const seen = results.filter(r => r.status === 'fulfilled').length
     await this.approval.ack({ id, result: seen ? { posted: true, id: signed.id, relays: seen } : { error: 'no relay accepted' } })
@@ -75,10 +108,15 @@ export class Nact {
   _gc() { const now = Date.now(); for (const [k, v] of this.pending) if (now - v.created > this.ttlMs) this.pending.delete(k) }
 }
 
-function loadSecret(v) {
-  const raw = (v ?? '').trim()
-  if (!raw) return null
-  if (raw.startsWith('nsec1')) return nip19.decode(raw).data
-  if (/^[0-9a-f]{64}$/i.test(raw)) return Uint8Array.from(raw.match(/.{1,2}/g).map(b => parseInt(b, 16)))
+// Turn an identity config into a signer. Order matters: an explicit signer
+// object wins, then a bunker URI, then a custodial nsec.
+function resolveSigner(cfg) {
+  if (!cfg) return null
+  if (cfg.signer && typeof cfg.signer.sign === 'function') return cfg.signer
+  if (cfg.bunker) return nip46Signer(cfg.bunker, { clientSecret: cfg.clientSecret })
+  if (cfg.nsec) { try { return custodialSigner(cfg.nsec) } catch { return null } }
   return null
 }
+
+export { custodialSigner } from './signers/custodial.mjs'
+export { nip46Signer } from './signers/nip46.mjs'

@@ -5,9 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/nact.mjs",
-    "./adapters/telegram": "./src/adapters/telegram.mjs"
+    "./adapters/telegram": "./src/adapters/telegram.mjs",
+    "./adapters/nostr-dm": "./src/adapters/nostr-dm.mjs",
+    "./signers/custodial": "./src/signers/custodial.mjs",
+    "./signers/nip46": "./src/signers/nip46.mjs"
   },
-  "keywords": ["nostr", "ai", "agent", "human-in-the-loop", "nip-46", "sovereignty", "nact", "nave"],
+  "keywords": ["nostr", "ai", "agent", "human-in-the-loop", "nip-17", "nip-46", "nip-59", "sovereignty", "nact", "nave"],
   "license": "MIT",
   "dependencies": {
     "nostr-tools": "^2.0.0"

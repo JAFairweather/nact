@@ -39,10 +39,10 @@ An agent that operates inside a data boundary *and* an action boundary.
   tags) and hands it to `nact`. This is where the LLM / signals / voice live.
   `nact` doesn't prescribe it.
 - **Approval broker** — routes the proposal to the human and collects the
-  decision. Ships with a **Telegram** adapter; a **nostr gift-wrap DM**
-  adapter (NIP-59, fully nostr-native, no third party) is the reference
-  target.
-- **Sovereign signer** — turns approval into a signature. Two modes:
+  decision. Ships with two adapters: **Telegram**, and a **nostr gift-wrap
+  DM** adapter (NIP-59 / NIP-17) that delivers the proposal to your own npub
+  so you approve in any nostr client — fully nostr-native, no third party.
+- **Sovereign signer** — turns approval into a signature. Two signers:
   **custodial role-key** (encrypted on your box — easy) or **NIP-46**
   (your key stays in your phone signer — maximal sovereignty). `nact` never
   puts your *personal* key on a server; role identities are your call.
@@ -81,6 +81,37 @@ await nact.propose({
 Wire the approval broker's callback (e.g. the Telegram webhook) to
 `nact.enact(decision)` and you're done.
 
+### Fully nostr-native (no Telegram, key stays on your phone)
+
+Deliver approvals as encrypted DMs to your own npub, and sign with your
+NIP-46 bunker — nothing custodial, no third-party messenger:
+
+```js
+import { Nact } from 'nact'
+import { nostrDmApproval } from 'nact/adapters/nostr-dm'
+
+const approval = nostrDmApproval({
+  channelNsec: process.env.NACT_CHANNEL_NSEC, // low-value carrier key; can't enact
+  approver:    process.env.MY_NPUB,           // only this npub may enact
+  relays,
+})
+
+const nact = new Nact({
+  identities: { me: { bunker: process.env.MY_BUNKER_URI } }, // key lives on your phone
+  relays,
+  approval,
+})
+
+approval.listen(wrap => nact.handleCallback(wrap))  // receive your replies
+
+// proposals now arrive as a DM; reply "ok <id>" in any NIP-17 client to enact.
+await nact.propose({ identity: 'me', event: { kind: 1, content: 'hello, sovereignly.' } })
+```
+
+Two independent gates now stand between the agent and a post: you tap **enact**
+in your DM client, and your **bunker** signs. Neither the agent nor the carrier
+key can produce a valid event.
+
 ## Safety model
 
 - **Keys never leave the human's custody surface.** Role keys are custodial
@@ -102,9 +133,11 @@ Use the NIP-46 signer mode and your key never leaves your phone.
 
 ## Status
 
-Early scaffold, extracted from the Nave ecosystem's Luke agent. The
-custodial signer + Telegram adapter are the working reference; the NIP-46
-signer and nostr-DM adapter are designed extension points (see `DESIGN.md`).
+Extracted from the Nave ecosystem's Luke agent, where the custodial signer +
+Telegram adapter run the live twice-daily posting loop. The **NIP-46 signer**
+and the **NIP-59 nostr-DM adapter** are now built (see `DESIGN.md` and
+`examples/`) — the nostr-native path is here, not just designed. Next: a
+persisted pending store and multi-approver quorum.
 
 ---
 
