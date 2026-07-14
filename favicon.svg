@@ -1,8 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="nact">
-  <rect x="2" y="2" width="96" height="96" rx="20" fill="#0b0906" stroke="#c39a56" stroke-opacity="0.5" stroke-width="2"/>
-  <g fill="none" stroke="#c39a56" stroke-width="4.2" stroke-linejoin="round" stroke-linecap="round">
-    <path d="M50 17 C34 17 30 33 32 50 L50 87 L68 50 C70 33 66 17 50 17 Z"/>
-    <path d="M50 53 L50 84"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="nact — a film clapperboard">
+  <rect x="2" y="2" width="96" height="96" rx="20" fill="#0b0906" stroke="#c39a56" stroke-width="2"/>
+  <g fill="none" stroke="#c39a56" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="24" y="50" width="52" height="30" rx="3"/>
+    <line x1="24" y1="62" x2="76" y2="62" stroke-width="2.6"/>
+    <line x1="24" y1="71" x2="76" y2="71" stroke-width="2.6"/>
   </g>
-  <circle cx="50" cy="47" r="4.8" fill="#0b0906" stroke="#e2c079" stroke-width="3"/>
+  <g transform="rotate(-15 26 45)">
+    <rect x="24" y="35" width="52" height="12" rx="2.5" fill="none" stroke="#c39a56" stroke-width="4"/>
+    <clipPath id="b"><rect x="24" y="35" width="52" height="12" rx="2.5"/></clipPath>
+    <g clip-path="url(#b)" fill="#c39a56">
+      <polygon points="21,47 31,47 43,35 33,35"/>
+      <polygon points="37,47 47,47 59,35 49,35"/>
+      <polygon points="53,47 63,47 75,35 65,35"/>
+      <polygon points="69,47 79,47 91,35 81,35"/>
+    </g>
+  </g>
 </svg>
