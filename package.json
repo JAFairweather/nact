@@ -1,0 +1,15 @@
+{
+  "name": "nact",
+  "version": "0.1.0",
+  "description": "Give an AI agent the ability to act on nostr — it drafts the action, you enact it with a signature, your keys never move.",
+  "type": "module",
+  "exports": {
+    ".": "./src/nact.mjs",
+    "./adapters/telegram": "./src/adapters/telegram.mjs"
+  },
+  "keywords": ["nostr", "ai", "agent", "human-in-the-loop", "nip-46", "sovereignty", "nact", "nave"],
+  "license": "MIT",
+  "dependencies": {
+    "nostr-tools": "^2.0.0"
+  }
+}
