@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nact — agentic actions on nostr, signed by you</title>
+<meta name="description" content="Give an AI agent a voice on nostr without giving it your keys: it drafts an action, you enact it with a signature, it broadcasts. The action-out half of scoped autonomy.">
+<link rel="icon" href="/favicon.svg">
+<!-- Open Graph / Twitter — rich previews when shared -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="nact">
+<meta property="og:title" content="nact — the agent proposes, you enact it by signing">
+<meta property="og:description" content="Give an AI agent the ability to act on nostr without ever holding your keys. Human-in-the-loop by architecture, not policy.">
+<meta property="og:url" content="https://nact.nave.pub">
+<meta property="og:image" content="https://nact.nave.pub/assets/nact.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://nact.nave.pub/assets/nact.png">
+<style>
+:root{
+  --ink:#0b0906; --panel:#14100a; --panel2:#1b1409; --line:#2a2317;
+  --text:#f4efe4; --dim:#9c927f; --gold:#c39a56; --gold-bright:#e2c079;
+  --accent:#c98f4f; --accent-bright:#e6b877;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Inter",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Roboto Mono",monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:radial-gradient(120% 90% at 50% -10%,#171009 0%,var(--ink) 55%);color:var(--text);
+  font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:920px;margin:0 auto;padding:0 22px}
+a{color:var(--accent-bright);text-decoration:none}
+a:hover{text-decoration:underline}
+h1,h2,h3{line-height:1.15;letter-spacing:-.01em}
+code,.mono{font-family:var(--mono)}
+
+/* hero */
+header.hero{text-align:center;padding:72px 0 40px}
+.seal{width:104px;height:104px;margin:0 auto 22px;display:block;filter:drop-shadow(0 14px 30px rgba(0,0,0,.6))}
+h1{font-size:clamp(44px,9vw,80px);margin:0;font-weight:650;
+  background:linear-gradient(180deg,var(--text),#cdbfa6);-webkit-background-clip:text;background-clip:text;color:transparent}
+.tagline{font-size:clamp(18px,3.4vw,25px);color:var(--accent-bright);margin:14px 0 6px;font-weight:500}
+.sub{color:var(--dim);max-width:600px;margin:10px auto 0;font-size:17px}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.btn{display:inline-block;padding:12px 22px;border-radius:8px;font-weight:600;font-size:15px;border:1px solid var(--line)}
+.btn.primary{background:var(--accent);color:var(--ink);border-color:var(--accent)}
+.btn.primary:hover{background:var(--accent-bright);text-decoration:none}
+.btn.ghost:hover{border-color:var(--accent);text-decoration:none}
+
+section{padding:34px 0;border-top:1px solid var(--line)}
+.kicker{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+h2{font-size:clamp(24px,4.5vw,32px);margin:0 0 14px}
+p.lead{font-size:18px;color:#e7ddca}
+
+/* flow */
+.flow{display:flex;gap:10px;flex-wrap:wrap;margin:22px 0 4px}
+.step{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.step .n{font-family:var(--mono);color:var(--accent);font-size:12px;letter-spacing:.1em}
+.step h4{margin:6px 0 4px;font-size:16px}
+.step p{margin:0;font-size:13.5px;color:var(--dim)}
+.arrow{align-self:center;color:var(--line);font-size:22px}
+
+/* points */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:18px}
+.pt{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px}
+.pt h4{margin:0 0 6px;font-size:16px;color:var(--accent-bright)}
+.pt p{margin:0;font-size:14px;color:var(--dim)}
+
+/* pairing */
+table{width:100%;border-collapse:collapse;margin-top:16px;font-size:15px}
+th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+td b{color:var(--accent-bright)}
+
+/* code */
+pre{background:#0d0a06;border:1px solid var(--line);border-radius:10px;padding:18px;overflow-x:auto;
+  font-family:var(--mono);font-size:13px;line-height:1.7;color:#d8cbb2}
+pre .c{color:#7d7360}
+pre .k{color:var(--accent-bright)}
+
+/* footer */
+footer{border-top:1px solid var(--line);margin-top:20px;padding:26px 0 46px;text-align:center;color:var(--dim);font-size:13.5px}
+footer .np{font-family:var(--mono);font-size:11.5px;word-break:break-all;color:#6f6555;margin-top:8px}
+footer a{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <img class="seal" src="/assets/nact.svg" alt="nact seal — a pen nib" width="104" height="104">
+    <h1>nact</h1>
+    <div class="tagline">The agent proposes. You enact it by signing.</div>
+    <p class="sub">Give an AI agent the ability to act on nostr — it drafts the action, you enact it
+      with a signature, it broadcasts. The agent never holds the key.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/JAFairweather/nact" target="_blank" rel="noopener">View on GitHub →</a>
+      <a class="btn ghost" href="https://nave.pub" target="_blank" rel="noopener">Part of the Nave</a>
+    </div>
+  </header>
+
+  <section>
+    <p class="kicker">The missing safety layer for agentic nostr</p>
+    <p class="lead">Almost every “AI posts to social” integration hands the bot your credentials — which is
+      why nobody sane points one at their real account. <b>nact</b> inverts that: the authorization is
+      <em>your</em> signature, and the key that produces it never leaves you. An agent can compose,
+      schedule, and publish on your behalf, but every outbound action passes a human tap. Human-in-the-loop
+      isn’t a setting you can forget to enable — it’s the architecture.</p>
+    <div class="flow">
+      <div class="step"><div class="n">01 · PERCEIVE</div><h4>signals in</h4><p>Your app feeds the agent what it’s allowed to see (pairs with <a href="https://nvoy.nave.pub" target="_blank" rel="noopener">Nvoy</a>).</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">02 · PROPOSE</div><h4>agent drafts</h4><p>An unsigned event — note, reaction, follow, zap, any kind.</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">03 · ENACT</div><h4>you sign</h4><p>You approve on your channel; your key signs. Reject = nothing happens.</p></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="n">04 · BROADCAST</div><h4>it publishes</h4><p>The finished, signed event goes to the relays.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">Why it’s safe</p>
+    <h2>Sovereignty by construction</h2>
+    <div class="grid">
+      <div class="pt"><h4>Keys never move</h4><p>Role keys are custodial only by your explicit choice; your sovereign identity signs via NIP-46 and never touches a server.</p></div>
+      <div class="pt"><h4>Only you may enact</h4><p>Approvals are checked against a single identity — your Telegram ID, or your npub in the nostr-DM adapter.</p></div>
+      <div class="pt"><h4>Discrete &amp; reviewed</h4><p>You see the exact event and a rationale before signing. No standing “post whenever” authority — ever.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <p class="kicker">Scoped autonomy</p>
+    <h2>The action-out half of the pair</h2>
+    <p class="lead">An agent bounded on both ends — what it may perceive, and what it may do.</p>
+    <table>
+      <tr><th></th><th>governs</th><th>direction</th></tr>
+      <tr><td><b><a href="https://nvoy.nave.pub" target="_blank" rel="noopener">Nvoy</a></b></td><td>what the agent may <b>perceive</b> — scoped, revocable data grants</td><td>in</td></tr>
+      <tr><td><b>nact</b></td><td>what the agent may <b>do</b> — signature-gated actions</td><td>out</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <p class="kicker">Quickstart</p>
+    <h2>Wire an agent in a dozen lines</h2>
+<pre><span class="c">// the agent drafts; nact routes it to you; your key signs on approval</span>
+<span class="k">import</span> { Nact } <span class="k">from</span> 'nact'
+<span class="k">import</span> { telegramApproval } <span class="k">from</span> 'nact/adapters/telegram'
+
+<span class="k">const</span> nact = <span class="k">new</span> Nact({
+  identities: { nave: { nsec: NAVE_NSEC }, luke: { nsec: LUKE_NSEC } },
+  relays: ['wss://relay.damus.io', 'wss://nos.lol'],
+  approval: telegramApproval({ botToken, approverId, webhookSecret }),
+})
+
+<span class="c">// your proposer (LLM + signals + voice) asks for an action to be enacted:</span>
+<span class="k">await</span> nact.propose({
+  identity: 'nave',
+  event: { kind: 1, content: 'shipped nact today — an agent that acts only when you sign.' },
+  context: 'launch note',   <span class="c">// shown to you, never published</span>
+})
+<span class="c">// → you get an Approve / Reject prompt. Approve → signed &amp; broadcast.</span></pre>
+    <p style="color:var(--dim);font-size:14px">Ships with a Telegram approval adapter and a custodial signer today; a
+      <b>NIP-59 gift-wrap DM adapter</b> (approve in any nostr client) and a <b>NIP-46 signer</b> (your key stays
+      on your phone) are the nostr-native path. <a href="https://github.com/JAFairweather/nact/blob/main/DESIGN.md" target="_blank" rel="noopener">See the design →</a></p>
+  </section>
+
+  <footer>
+    a <a href="https://nave.pub" target="_blank" rel="noopener">nave.pub</a> project ·
+    <a href="mailto:help@nave.pub">help@nave.pub</a> ·
+    <a href="https://github.com/JAFairweather/nact" target="_blank" rel="noopener">GitHub</a>
+    <div class="np">npub1gqg2csuzqmwpqqvts99786spefkf90xz96t3n6zp6fqnk2r74pxs4tcgrg</div>
+  </footer>
+
+</div>
+</body>
+</html>
