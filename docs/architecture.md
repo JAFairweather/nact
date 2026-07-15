@@ -2,7 +2,7 @@
 
 **This doc describes the target** — config delivered to the runtime as scoped
 data over Nvoy. A **pragmatic V1 of the same shape is built and live** (see
-`../server/`): identical endpoints and app, but the transport is HTTP + NIP-98
+`../nactor/`): identical endpoints and app, but the transport is HTTP + NIP-98
 and the config lives in a local file instead of a grant. The two reconcile at
 the end of this doc; the migration is contained (swap the config store's
 read/write, keep everything else). Every primitive the target stands on already
@@ -22,7 +22,7 @@ your key, and the runtime trusts config only from your npub.
 ```
    YOU (jaf@)                              THE BOX
    nsec on your device                     ┌──────────────────────────────┐
-      │                                     │  Nact runtime                 │
+      │                                     │  Nactor                      │
       │ 1. publish config scope +           │   nsec (SOPS) ─ decrypts ─┐    │
       │    grant → runtime npub             │   npub  ◄─────────────────┘    │
       ▼          (Nvoy / NIP-DA)            │        reconciles box to it:   │
@@ -73,7 +73,7 @@ delegated data — an MCP tool call:
 you (master) ── grant config-scope ──► runtime's npub          (NIP-DA, over relays)
 Nvoy (holds the runtime's nsec) ── dereferences + decrypts the scope, live
    └── exposes it as an MCP tool:  get_config → { identities, channels, routing, tiers }
-Nact runtime ── calls the MCP tool ── "zero nostr knowledge"
+Nactor ── calls the MCP tool ── "zero nostr knowledge"
 ```
 
 Nvoy handles the decrypt, the live-dereference, and revocation; the runtime just

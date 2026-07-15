@@ -130,6 +130,14 @@ primitive:
 The library is the runtime; the app is the control plane that configures it —
 the same idea seen from two sides, under one name.
 
+### Nactor — the runtime
+
+Deployed on a box with its own keypair and an actuator, the library runs as
+**Nactor** — the on-box *actor* that receives config/proposals (as scoped data)
+and enacts. Its actuator is pluggable: **publish to relays** for Nact, **exec on
+the box** for [Nops](docs/nops.md). Same actor, different enactment. See
+[`nactor/`](nactor) and [`docs/architecture.md`](docs/architecture.md).
+
 ## Two directions the primitive wants to grow
 
 These aren't built yet — they're the design's natural next moves, recorded so we

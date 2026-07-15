@@ -150,7 +150,7 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
 
 <div class="wrap">
   <div class="demo" id="banner">Prototype wired to <b>sample data</b> — clicking Approve / Reject / Revoke updates local state only.
-    <b>Connect</b> (with a NIP-07 signer) to talk to the live Nact runtime behind the NIP-98 gate.</div>
+    <b>Connect</b> (with a NIP-07 signer) to talk to Nactor (the live Nact runtime) behind the NIP-98 gate.</div>
   <nav class="tabs" id="tabs"></nav>
   <section id="view"></section>
 </div>
@@ -218,7 +218,7 @@ async function goLive(){
   if(!window.nostr){ alert('Install a NIP-07 signer (Alby, nos2x) and reload to connect.'); return; }
   try{
     await refresh(); LIVE=true;
-    const b=document.getElementById('banner'); b.innerHTML='<b>● LIVE</b> — connected to the Nact runtime as your master key. Approve / Reject / routing changes are real.'; b.style.borderColor='var(--low)'; b.style.color='var(--low)';
+    const b=document.getElementById('banner'); b.innerHTML='<b>● LIVE</b> — connected to Nactor as your master key. Approve / Reject / routing changes are real.'; b.style.borderColor='var(--low)'; b.style.color='var(--low)';
     document.getElementById('connect').textContent='● LIVE';
   }catch(e){ alert('Connect failed: '+e.message+'\nIs the runtime deployed, and are you signing with the master key?'); }
 }

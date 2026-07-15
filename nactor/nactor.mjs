@@ -1,4 +1,5 @@
-// Nact runtime — a NIP-98-gated HTTP control-plane over the Nact library.
+// Nactor — the Nact runtime. A NIP-98-gated HTTP control-plane over the Nact
+// library: the on-box actor that receives config/proposals and enacts.
 //
 // The control-plane app (nact.nave.pub) talks to this. Every /api/* request is
 // authenticated with a NIP-98 event signed by the master's key; only the master
@@ -131,7 +132,7 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`nact runtime on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · master: ${MASTER ? 'set' : 'MISSING'} · relays: ${RELAYS.length}`)
+  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · master: ${MASTER ? 'set' : 'MISSING'} · relays: ${RELAYS.length}`)
 })
 
 export { server, nact, config }

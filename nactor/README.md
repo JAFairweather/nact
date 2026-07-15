@@ -1,9 +1,13 @@
-# Nact runtime (server)
+# Nactor — the Nact runtime
 
-A NIP-98-gated HTTP control-plane over the Nact library. The control-plane app
-(`app.html`) talks to this; only the master's key may read the queue, enact, or
-edit config. Role signing keys come from the environment (SOPS-decrypted on the
-box) and never leave it.
+The on-box **actor** that receives config/proposals and enacts: a NIP-98-gated
+HTTP control-plane over the Nact library. The control-plane app (`app.html`)
+talks to this; only the master's key may read the queue, enact, or edit config.
+Role signing keys come from the environment (SOPS-decrypted on the box) and never
+leave it.
+
+Its actuator is pluggable — *publish to relays* for Nact, *exec on the box* for
+Nops (`../docs/nops.md`). Same actor, different enactment.
 
 This is the **pragmatic V1 transport** — HTTP + NIP-98, the same gate Luke's
 cockpit uses. The config-as-grant-over-Nvoy model in
@@ -18,7 +22,7 @@ LUKE_NSEC=…  NAVE_NSEC=…      # each <NAME>_NSEC becomes identity <name>
 LUKE_RELAYS=wss://relay.damus.io,wss://nos.lol
 NACT_CONFIG=/data/nact-config.json   # channels / tiers / metadata (persisted)
 NACT_PORT=8791
-node server/server.mjs
+node nactor/nactor.mjs
 ```
 
 ## Endpoints (all `/api/*` require NIP-98 from the master, except health)
@@ -36,9 +40,9 @@ pinning the method + URL path (+ sha256 of the body). See `nip98.mjs`.
 
 ## Deploy (on the Nave platform)
 
-- Built as the `nact-runtime` service (see `server/Dockerfile`), env from
+- Built as the `nactor` service (see `nactor/Dockerfile`), env from
   `luke.env` (reuses `LUKE_NSEC` / `NAVE_NSEC` / `LUKE_MASTER_NPUB`).
-- Caddy routes `nact.nave.pub/api/*` → `nact-runtime:8791`; everything else is
+- Caddy routes `nact.nave.pub/api/*` → `nactor:8791`; everything else is
   the static app off disk.
 
 ## What V1 does and doesn't

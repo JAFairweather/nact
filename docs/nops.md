@@ -75,4 +75,5 @@ it's a curiosity. Worth naming and letting breathe — not worth dropping Nact f
   step being `exec` instead of `publish`;
 - the audit trail = the signed request + approval events.
 
-Effectively: **Nact, with `exec` as the actuator.**
+Effectively: **[Nactor](../nactor) — the Nact runtime — with `exec` as the
+actuator** instead of publish.
