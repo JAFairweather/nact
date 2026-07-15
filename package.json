@@ -11,9 +11,26 @@
     "./signers/nip46": "./src/signers/nip46.mjs",
     "./inspect": "./src/inspect.mjs"
   },
-  "keywords": ["nostr", "ai", "agent", "human-in-the-loop", "nip-17", "nip-46", "nip-59", "sovereignty", "nact", "nave"],
+  "keywords": [
+    "nostr",
+    "ai",
+    "agent",
+    "human-in-the-loop",
+    "nip-17",
+    "nip-46",
+    "nip-59",
+    "sovereignty",
+    "nact",
+    "nave"
+  ],
   "license": "MIT",
+  "scripts": {
+    "build:bunker": "esbuild ./nactor/bunker-entry.mjs --bundle --format=esm --platform=browser --target=es2020 --minify --outfile=assets/vendor/nostr-tools-bunker.mjs"
+  },
   "dependencies": {
     "nostr-tools": "^2.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
   }
 }
