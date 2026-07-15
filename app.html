@@ -112,6 +112,15 @@ section{padding:8px 0 40px}
 .cell.on{color:var(--low);border-color:color-mix(in srgb,var(--low) 55%,transparent);background:color-mix(in srgb,var(--low) 13%,transparent)}
 .cell.stale{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 45%,transparent)}
 
+/* create forms */
+.form{display:flex;flex-direction:column;gap:10px;margin-top:14px;max-width:480px}
+.form input,.form select{background:#0d0a06;border:1px solid var(--line2);border-radius:8px;
+  padding:10px 12px;color:var(--text);font-family:var(--sans);font-size:14px;width:100%}
+.form input::placeholder{color:var(--faint)}
+.form label{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:-4px}
+.form .note{font-size:12px;color:var(--faint);margin-top:2px}
+.form button{align-self:flex-start;margin-top:4px}
+
 /* policy table */
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -244,7 +253,19 @@ function draw(){
       <div class="chips">${chs.length
         ? chs.map(c=>`<span class="chip ${c.status==='active'?'on':''}">🔗 ${esc(c.name)} · ${esc(chanShort(c))}${c.status!=='active'?' (severed)':''}</span>`).join('')
         : `<span class="chip warnchip">⚠ no channel — cannot be approved</span>`}</div>
-      <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}</div>`;
+      <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}
+      <div class="card" style="border-style:dashed">
+        <h3 style="color:var(--accent-bright)">+ Add identity</h3>
+        <div class="muted">Provide the metadata; the key is generated <b>on the box</b> and stored SOPS-encrypted — the browser never sees an nsec.</div>
+        <div class="form">
+          <label>Handle (NIP-05)</label><input id="ni-handle" placeholder="scout@nave.pub">
+          <label>Display name</label><input id="ni-name" placeholder="Scout">
+          <label>Signer</label>
+          <select id="ni-signer"><option value="custodial">custodial — key generated on the box (SOPS)</option><option value="bunker">NIP-46 bunker — key stays on your device</option></select>
+          <input id="ni-bunker" placeholder="bunker://… connection string" style="display:none">
+          <button class="btn primary" id="ni-create">Create identity</button>
+          <div class="note">Then wire it to a channel in <b>Routing</b>, and publish its profile.</div>
+        </div></div></div>`;
   }
   if(tab==='routing'){
     h=`<div class="card"><div class="label" style="margin-top:0">Routing — wire each identity to each channel</div>
@@ -264,8 +285,18 @@ function draw(){
       <div class="label">Signs for these identities</div>
       <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
       <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">Revoke channel</button></div></div>`).join('')}
-      <div class="card" style="border-style:dashed;color:var(--dim)"><h3 style="color:var(--dim)">+ Construct a channel</h3>
-      <div class="muted">Bind an approval channel (Telegram · NIP-59 DM · later Signal / Matrix / web-push) to one or more identities, with its own approver and scoped authority. Wired in the full app.</div></div></div>`;
+      <div class="card" style="border-style:dashed">
+        <h3 style="color:var(--accent-bright)">+ Add channel instance</h3>
+        <div class="muted">Its secret (bot token / channel nsec) is stored SOPS-encrypted <b>on the box</b> — entered once, never shown again.</div>
+        <div class="form">
+          <label>Name</label><input id="nc-name" placeholder="Ops approvals">
+          <label>Type</label>
+          <select id="nc-type"><option>Telegram bot</option><option>NIP-59 gift-wrap</option><option disabled>Signal (soon)</option><option disabled>Matrix (soon)</option></select>
+          <label>Approver</label><input id="nc-approver" placeholder="Telegram numeric id, or an npub">
+          <label>Secret</label><input id="nc-secret" placeholder="bot token / channel nsec — stored SOPS-encrypted on the box">
+          <button class="btn primary" id="nc-create">Add channel</button>
+          <div class="note">Then wire identities to it in <b>Routing</b>.</div>
+        </div></div></div>`;
   }
   if(tab==='policy'){
     h=`<div class="card"><div class="muted" style="margin-bottom:8px">Per-kind risk tiers. <b>Critical</b> kinds get no one-tap path — they require sign-on-device. Click a tier to cycle it.</div>
@@ -291,6 +322,27 @@ function draw(){
   v.querySelectorAll('[data-wire]').forEach(b=>b.onclick=()=>{const [ik,cid]=b.dataset.wire.split('|');
     const c=S.channels.find(x=>x.id===cid);const at=c.covers.indexOf(ik);
     if(at<0)c.covers.push(ik);else c.covers.splice(at,1);draw()});
+  // create identity
+  const sig=document.getElementById('ni-signer');
+  if(sig) sig.onchange=()=>{document.getElementById('ni-bunker').style.display=sig.value==='bunker'?'block':'none'};
+  const nic=document.getElementById('ni-create');
+  if(nic) nic.onclick=()=>{
+    const handle=(document.getElementById('ni-handle').value||'').trim()||'new@nave.pub';
+    const key=handle.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g,'')||('id'+S.identities.length);
+    const signer=document.getElementById('ni-signer').value;
+    const fakeNpub='npub1'+Array.from({length:38},()=>'0123456789acdefghjklmnpqrstuvwxyz'[Math.floor(Math.random()*33)]).join('');
+    S.identities.push({key,handle,npub:fakeNpub,signer,status:'active'});
+    tab='identities';draw();
+  };
+  // create channel
+  const ncc=document.getElementById('nc-create');
+  if(ncc) ncc.onclick=()=>{
+    const name=(document.getElementById('nc-name').value||'').trim()||'New channel';
+    const type=document.getElementById('nc-type').value;
+    const approver=(document.getElementById('nc-approver').value||'').trim()||'—';
+    S.channels.push({id:'ch'+S.channels.length+Date.now().toString(36).slice(-3),name,kind:type,approver,covers:[],status:'active'});
+    tab='channels';draw();
+  };
   v.querySelectorAll('[data-tier]').forEach(b=>b.onclick=()=>{const p=S.policy[+b.dataset.tier];
     p.tier={low:'elevated',elevated:'critical',critical:'low'}[p.tier];draw()});
 }
