@@ -121,6 +121,10 @@ key can produce a valid event.
   single identity (Telegram id, or an npub in the nostr-DM adapter).
 - **Every action is discrete and reviewed.** The human sees the exact event
   and a rationale before signing. No standing "post whenever" authority.
+- **What you see is what you sign.** The approval must render the *actual*
+  action, not a description of it, and critical actions step up to
+  sign-on-device (the bunker is the authoritative screen). The full threat model
+  and phased response plan: [`docs/threat-model.md`](docs/threat-model.md).
 
 ## Relationship to NIP-46
 
