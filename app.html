@@ -92,6 +92,21 @@ section{padding:8px 0 40px}
 .btn.danger:hover{background:color-mix(in srgb,var(--crit) 14%,transparent)}
 .empty{color:var(--faint);text-align:center;padding:44px;border:1px dashed var(--line);border-radius:12px}
 
+/* identity<->channel wiring */
+.chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:7px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;
+  border:1px solid var(--line2);border-radius:999px;padding:3px 10px;color:var(--dim)}
+.chip.on{color:var(--accent-bright);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.chip.warnchip{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 55%,transparent)}
+.label{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin-top:12px}
+.matrix{width:100%;border-collapse:collapse;font-size:13.5px}
+.matrix th,.matrix td{border:1px solid var(--line);padding:10px 12px;text-align:center}
+.matrix th:first-child,.matrix td:first-child{text-align:left}
+.matrix thead th{color:var(--dim);font-family:var(--mono);font-size:11px;letter-spacing:.05em;font-weight:600}
+.matrix thead th small{display:block;font-weight:400;color:var(--faint);text-transform:none;letter-spacing:0}
+.matrix .yes{color:var(--low);font-weight:700}
+.matrix .no{color:var(--faint)}
+
 /* policy table */
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
@@ -172,6 +187,8 @@ const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();
 const esc = s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const tierBadge = t=>`<span class="badge b-${t==='critical'?'crit':t==='elevated'?'elev':'low'}">${t}</span>`;
 const idOf = k=>S.identities.find(i=>i.key===k)||{handle:k};
+const channelsFor = k=>S.channels.filter(c=>c.covers.includes(k));
+const chanShort = c=>c.kind.split(' ')[0];   // "Telegram" / "NIP-59"
 
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
@@ -211,18 +228,32 @@ function draw(){
       : `<div class="empty">Nothing awaiting approval. The agent will propose when it has something worth posting.</div>`;
   }
   if(tab==='identities'){
-    h=`<div class="grid">${S.identities.map(i=>`<div class="card"><div class="row between">
+    h=`<div class="grid">${S.identities.map(i=>{
+      const chs=channelsFor(i.key);
+      return `<div class="card"><div class="row between">
       <div class="row"><span class="avatar">${i.handle[0].toUpperCase()}</span><div>
         <h3>${esc(i.handle)}</h3><div class="muted">signs via <b>${i.signer==='custodial'?'custodial key (SOPS-encrypted)':'NIP-46 bunker'}</b></div></div></div>
       <span class="badge ${i.status==='active'?'b-ok':'b-off'}">${i.status}</span></div>
-      <div class="kv" style="margin:12px 0 6px">${esc(i.npub)}</div>
-      <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`).join('')}</div>`;
+      <div class="kv" style="margin:12px 0 2px">${esc(i.npub)}</div>
+      <div class="label">Approved through</div>
+      <div class="chips">${chs.length
+        ? chs.map(c=>`<span class="chip ${c.status==='active'?'on':''}">🔗 ${esc(c.name)} · ${esc(chanShort(c))}${c.status!=='active'?' (severed)':''}</span>`).join('')
+        : `<span class="chip warnchip">⚠ no channel — cannot be approved</span>`}</div>
+      <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}</div>`;
   }
   if(tab==='channels'){
-    h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
+    const matrix = `<div class="card"><div class="label" style="margin-top:0">Wiring — which identity is reachable through which channel</div>
+      <table class="matrix" style="margin-top:10px"><thead><tr><th>Identity ╲ Channel</th>
+      ${S.channels.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
+      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}</td>${S.channels.map(c=>{
+        const wired=c.covers.includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
+        return `<td class="${live?'yes':'no'}">${wired?(live?'✓':'✕'):'·'}</td>`;}).join('')}</tr>`).join('')}</tbody></table>
+      <div class="muted" style="margin-top:8px;font-size:12.5px">✓ wired &amp; live · ✕ wired but severed/revoked · · not wired</div></div>`;
+    h=`<div class="grid">${matrix}${S.channels.map(c=>`<div class="card"><div class="row between">
       <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · approver <b>${esc(c.approver)}</b></div></div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
-      <div class="muted" style="margin-top:10px">covers: ${c.covers.map(k=>esc(idOf(k).handle)).join(', ')}</div>
+      <div class="label">Signs for these identities</div>
+      <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
       <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">Revoke channel</button></div></div>`).join('')}
       <div class="card" style="border-style:dashed;color:var(--dim)"><h3 style="color:var(--dim)">+ Construct a channel</h3>
       <div class="muted">Bind an approval channel (Telegram · NIP-59 DM · later Signal / Matrix / web-push) to one or more identities, with its own approver and scoped authority. Wired in the full app.</div></div></div>`;
