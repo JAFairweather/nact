@@ -143,14 +143,14 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
   </svg>
   <div class="title">Nact <small>· control plane</small></div>
   <div class="spacer"></div>
-  <span class="who" id="master"></span>
+  <span class="who" id="director"></span>
   <button class="pill" id="connect" style="cursor:pointer">◉ Connect</button>
   <span class="pill">V1</span>
 </div></header>
 
 <div class="wrap">
   <div class="demo" id="banner">Prototype wired to <b>sample data</b> — clicking Approve / Reject / Revoke updates local state only.
-    <b>Connect</b> (with a NIP-07 signer) to talk to Nactor (the live Nact runtime) behind the NIP-98 gate.</div>
+    <b>Connect</b> as a Director (with a NIP-07 signer) to talk to Nactor (the live Nact runtime) behind the NIP-98 gate.</div>
   <nav class="tabs" id="tabs"></nav>
   <section id="view"></section>
 </div>
@@ -159,7 +159,15 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
 <script>
 // ---- seed state (stand-in for the runtime's real data) -------------------
 const S = {
-  master: 'jaf@dequalsf.com',
+  director: 'jaf@dequalsf.com',                 // the connected Director (this session)
+  // Directors — the human decision-maker(s) who approve or reject. Part of the
+  // config, not the box's env. (Distinct from Noir's AI "Director".)
+  directors: [
+    { npub:'npub1gqg2csuzqmwpqqvts99786spefkf90xz96t3n6zp6fqnk2r74pxs4tcgrg', label:'jaf@dequalsf.com', bootstrap:true },
+  ],
+  // The Nactor this config targets — the runtime that applies it. Can be this
+  // box or a remote one; the app just points at its address.
+  nactorAddress: 'https://nact.nave.pub/api',
   identities: [
     { key:'luke', handle:'luke@nave.pub', npub:'npub1lyuqym67ztczd7xunupjednja9r05xmrrgvhmsrwvdw5duq5vedq44kfxv', signer:'custodial', status:'active' },
     { key:'nave', handle:'nave@nave.pub', npub:'npub1mr09rp9qjmjfk0mewvp93szl3la4dn038rqgk0rmpvrgtg8mjclqk5002v', signer:'custodial', status:'active' },
@@ -206,6 +214,9 @@ async function sha256hex(s){const b=await crypto.subtle.digest('SHA-256',new Tex
 async function nip98(method,path,bodyStr){const tags=[['u',location.origin+path],['method',method]];if(bodyStr)tags.push(['payload',await sha256hex(bodyStr)]);const ev=await window.nostr.signEvent({kind:27235,created_at:Math.floor(Date.now()/1000),tags,content:''});return 'Nostr '+btoa(JSON.stringify(ev))}
 async function api(method,path,body){const s=body?JSON.stringify(body):'';const headers={authorization:await nip98(method,path,s)};if(s)headers['content-type']='application/json';const r=await fetch(path,{method,headers,body:s||undefined});if(!r.ok)throw new Error(path+' → '+r.status);return r.json()}
 function mapState(st){
+  S.director=st.director?st.director.slice(0,12)+'…':S.director;
+  S.nactorAddress=st.nactorAddress||S.nactorAddress;
+  S.directors=(st.directors||[]).map(np=>({npub:np,label:np.slice(0,12)+'…',bootstrap:np===st.bootstrap}));
   S.identities=st.identities.map(i=>({key:i.key,handle:i.handle,npub:i.npub||'',signer:i.signer,status:i.status}));
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
@@ -213,14 +224,14 @@ function mapState(st){
   S.history=(st.history||[]).map(h=>({id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when:new Date(h.when).toLocaleTimeString(),relays:h.detail?(parseInt(h.detail)||0):0}));
 }
 async function refresh(){ mapState(await api('GET','/api/state')); draw(); }
-async function syncConfig(){ if(!LIVE)return; try{ await api('PUT','/api/config',{channels:S.channels,tiers:Object.fromEntries(S.policy.map(p=>[String(p.kind),p.tier]))}); }catch(e){ alert('config save failed: '+e.message); } }
+async function syncConfig(){ if(!LIVE)return; try{ await api('PUT','/api/config',{directors:S.directors.map(d=>d.npub),nactorAddress:S.nactorAddress,channels:S.channels,tiers:Object.fromEntries(S.policy.map(p=>[String(p.kind),p.tier]))}); }catch(e){ alert('config save failed: '+e.message); } }
 async function goLive(){
   if(!window.nostr){ alert('Install a NIP-07 signer (Alby, nos2x) and reload to connect.'); return; }
   try{
     await refresh(); LIVE=true;
-    const b=document.getElementById('banner'); b.innerHTML='<b>● LIVE</b> — connected to Nactor as your master key. Approve / Reject / routing changes are real.'; b.style.borderColor='var(--low)'; b.style.color='var(--low)';
+    const b=document.getElementById('banner'); b.innerHTML='<b>● LIVE</b> — connected to Nactor as a Director. Approve / Reject / routing changes are real.'; b.style.borderColor='var(--low)'; b.style.color='var(--low)';
     document.getElementById('connect').textContent='● LIVE';
-  }catch(e){ alert('Connect failed: '+e.message+'\nIs the runtime deployed, and are you signing with the master key?'); }
+  }catch(e){ alert('Connect failed: '+e.message+'\nIs the runtime deployed, and are you signing with a Director key?'); }
 }
 
 const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
@@ -232,7 +243,7 @@ const chanShort = c=>c.kind.split(' ')[0];   // "Telegram" / "NIP-59"
 
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  const defs=[['queue','Queue',S.queue.length],['identities','Identities'],['channels','Channels'],['routing','Routing'],['policy','Policy'],['history','History']];
+  const defs=[['queue','Queue',S.queue.length],['identities','Identities'],['channels','Channels'],['routing','Routing'],['directors','Directors'],['policy','Policy'],['history','History']];
   for(const [k,label,n] of defs){
     const b=$(`<button class="tab ${k===tab?'on':''}">${label}${n?`<span class="n">${n}</span>`:''}</button>`);
     b.onclick=()=>{tab=k;draw()}; t.appendChild(b);
@@ -261,7 +272,7 @@ function proposalCard(p){
 }
 function draw(){
   renderTabs();
-  document.getElementById('master').textContent = S.master;
+  document.getElementById('director').textContent = S.director;
   const v=document.getElementById('view'); let h='';
   if(tab==='queue'){
     h = S.queue.length ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
@@ -304,9 +315,34 @@ function draw(){
         return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}</tr>`).join('')}</tbody></table>
       <div class="muted" style="margin-top:10px;font-size:12.5px">✓ wired &amp; live · ✕ wired but the channel or identity is severed · ○ not wired — click to toggle</div></div>`;
   }
+  if(tab==='directors'){
+    h=`<div class="card">
+      <h3>Nactor address</h3>
+      <div class="muted" style="margin:2px 0 10px">The runtime this config targets — the box that applies your identities, channels, and routing, and holds the queue. It can be this box or a remote one; the app just points at its address.</div>
+      <div class="form" style="max-width:560px;margin-top:0">
+        <label>Address</label><input id="na-addr" placeholder="https://nact.nave.pub/api" value="${esc(S.nactorAddress||'')}">
+        <button class="btn primary" id="na-save">Save address</button>
+        <div class="note">Same box as this app, or another entirely — the runtime is decoupled from where you configure it.</div>
+      </div></div>
+      <div class="card" style="margin-top:14px">
+      <h3>Directors</h3>
+      <div class="muted" style="margin:2px 0 12px">The human decision-maker(s) who approve or reject a proposal before it's signed. Any one Director can enact (m-of-n quorum is a later policy). Part of the config — add or remove them here, no box access needed. <b>Not</b> Noir's AI "Director".</div>
+      <div class="grid">${S.directors.map(d=>`<div class="card" style="padding:14px"><div class="row between">
+        <div class="row"><span class="avatar">${esc((d.label||'D')[0].toUpperCase())}</span>
+          <div><h3 style="font-size:15px">${esc(d.label||'Director')}${d.bootstrap?' <span class="badge b-elev" style="vertical-align:2px">anchor</span>':''}</h3>
+          <div class="kv">${esc(d.npub)}</div></div></div>
+        ${d.bootstrap?'<span class="req">bootstrap — cannot be removed</span>':`<button class="btn danger" data-rm-dir="${esc(d.npub)}">Remove</button>`}</div></div>`).join('')}</div>
+      <div class="form" style="margin-top:14px">
+        <label>Add a Director</label>
+        <input id="nd-label" placeholder="name or NIP-05 (label only)">
+        <input id="nd-npub" placeholder="npub1… — their public key">
+        <button class="btn primary" id="nd-add">Add Director</button>
+        <div class="note">They approve by signing with this key (NIP-07 in the browser, or a NIP-46 bunker). Only the npub is needed — no secret is ever entered here.</div>
+      </div></div>`;
+  }
   if(tab==='channels'){
     h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
-      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · approver <b>${esc(c.approver)}</b></div></div>
+      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · Director <b>${esc(c.approver)}</b></div></div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
       <div class="label">Signs for these identities</div>
       <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
@@ -318,7 +354,7 @@ function draw(){
           <label>Name</label><input id="nc-name" placeholder="Ops approvals">
           <label>Type</label>
           <select id="nc-type"><option>Telegram bot</option><option>NIP-59 gift-wrap</option><option disabled>Signal (soon)</option><option disabled>Matrix (soon)</option></select>
-          <label>Approver</label><input id="nc-approver" placeholder="Telegram numeric id, or an npub">
+          <label>Director</label><input id="nc-approver" placeholder="Telegram numeric id, or an npub">
           <label>Secret</label><input id="nc-secret" placeholder="bot token / channel nsec — stored SOPS-encrypted on the box">
           <button class="btn primary" id="nc-create">Add channel</button>
           <div class="note">Then wire identities to it in <b>Routing</b>.</div>
@@ -371,6 +407,19 @@ function draw(){
   };
   v.querySelectorAll('[data-tier]').forEach(b=>b.onclick=()=>{const p=S.policy[+b.dataset.tier];
     p.tier={low:'elevated',elevated:'critical',critical:'low'}[p.tier];draw();syncConfig()});
+  // Nactor address + Directors
+  const nas=document.getElementById('na-save');
+  if(nas) nas.onclick=()=>{S.nactorAddress=(document.getElementById('na-addr').value||'').trim();syncConfig()};
+  const nda=document.getElementById('nd-add');
+  if(nda) nda.onclick=()=>{
+    const npub=(document.getElementById('nd-npub').value||'').trim();
+    if(!/^npub1[0-9a-z]{20,}$/.test(npub)){alert('Enter a valid npub1… key.');return;}
+    const label=(document.getElementById('nd-label').value||'').trim()||npub.slice(0,12)+'…';
+    if(S.directors.some(d=>d.npub===npub)){alert('That Director is already added.');return;}
+    S.directors.push({npub,label,bootstrap:false});draw();syncConfig();
+  };
+  v.querySelectorAll('[data-rm-dir]').forEach(b=>b.onclick=()=>{
+    S.directors=S.directors.filter(d=>d.npub!==b.dataset.rmDir||d.bootstrap);draw();syncConfig();});
 }
 async function decide(id,outcome){
   if(LIVE){

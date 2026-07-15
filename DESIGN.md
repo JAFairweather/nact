@@ -116,6 +116,13 @@ An **approval channel is itself a scoped grant** — of *approval authority*, no
 data. So the app is a grant manager, built (like Nvoy) on the same NIP-DA
 primitive:
 
+- **Directors** — the human decision-maker(s) who approve or reject before a
+  signature is applied. One or more npubs, **part of the config** (a bootstrap
+  Director seeds an empty config and can't be locked out; co-Directors are added
+  here for quorum). "Director" is the approver role — **not** Noir's AI GM.
+- **Nactor address** — which runtime this config targets. The app and the runtime
+  are decoupled: the Nactor can be this box or a remote one, and the app just
+  points at its address. See [`docs/architecture.md`](docs/architecture.md).
 - **Identities** the agent may act as (custodial or NIP-46).
 - **Channels** — Telegram, NIP-59 nostr-DM, later Signal / Matrix / web-push —
   bound to identities.
@@ -128,7 +135,10 @@ primitive:
   *un-authorize it*.
 
 The library is the runtime; the app is the control plane that configures it —
-the same idea seen from two sides, under one name.
+the same idea seen from two sides, under one name. Because the config names both
+the Directors and the Nactor address, *where you configure* and *where it runs*
+are independent: the app on your laptop can drive a Nactor on a VPS you never
+open a shell to.
 
 ### Nactor — the runtime
 

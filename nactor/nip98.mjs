@@ -1,6 +1,7 @@
 // Minimal NIP-98 (HTTP Auth over nostr) verifier.
-// The client signs a kind-27235 event pinning the request; we verify it was
-// signed by the authorized master pubkey and matches this request.
+// The client signs a kind-27235 event pinning the request; we verify the
+// signature and that it matches this request, then return the signer's pubkey —
+// the caller checks it against the authorized Director set.
 import { verifyEvent } from 'nostr-tools'
 import { createHash } from 'node:crypto'
 

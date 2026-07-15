@@ -9,19 +9,50 @@ read/write, keep everything else). Every primitive the target stands on already
 runs in the ecosystem today: NIP-DA scoped grants (via Nvoy's MCP server),
 NIP-59 DMs, SOPS on the box, and NIP-07/NIP-46 signing in the browser.
 
-## The short version
+## Two pieces, decoupled: the app and the runtime
 
-The app does **not** call a server API. It writes your Nact config as an
+Nact has **two deployables that need not share a box**:
+
+- **Nact — the app (control plane).** Static files where a **Director** sets up
+  identities, channels, routing, risk tiers — *and* two pieces of pointing
+  config: **who the Directors are** (the human decision-maker npubs) and **the
+  Nactor address** (which runtime this config targets). It can run anywhere,
+  including your own laptop; it holds no keys and no secrets.
+- **Nactor — the runtime.** The on-box actor that *applies* that config, holds
+  the queue, and signs the enacted events with the role keys. It can run on the
+  same box as the app or an entirely different one.
+
+The app **points at** a Nactor by address; the Nactor **trusts** a config only
+from a configured Director. Config is where the two meet — it names both ends
+(the Directors who may act, the Nactor that applies it), so neither is baked into
+a deploy.
+
+```
+   THE DIRECTOR                            THE APP (anywhere)         THE RUNTIME (anywhere)
+   a human decision-maker                  ┌───────────────────┐     ┌──────────────────────────────┐
+   nsec on their device                    │  Nact control     │     │  Nactor                      │
+      │  signs config + approvals          │  plane (static)   │     │   applies config to the box: │
+      │  with NIP-07 / NIP-46              │   • Directors ────┼──┐  │    • gen role keys (SOPS)    │
+      ▼                                     │   • Nactor addr ──┼─┐│  │    • register webhooks       │
+  [ their signature ] ───────────────────► │   • identities    │ ││  │    • apply routing + tiers   │
+                                            │   • channels      │ │└─►│   role nsecs (SOPS) sign ─────┼─► relays
+                                            │   • routing/tiers │ └──►│  (address the app points at) │
+                                            └───────────────────┘     └──────────────────────────────┘
+```
+
+## The short version (target transport)
+
+The app does **not** call a server API. It writes the Nact config as an
 **encrypted, scoped grant addressed to the runtime's npub** (a Nvoy / NIP-DA
 grant); the runtime **decrypts it with its nsec** and reconciles the box to it.
 Status flows back the same way. The "server" is a **nostr peer**, not an HTTP
 endpoint — so there's no `/api`, no CORS, no session cookie, and no NIP-98 gate.
-Authorization is carried by the grant itself: only you can sign a scope under
-your key, and the runtime trusts config only from your npub.
+Authorization is carried by the grant itself: only a **Director** can sign a
+scope under their key, and the runtime trusts config only from a Director npub.
 
 ```
-   YOU (jaf@)                              THE BOX
-   nsec on your device                     ┌──────────────────────────────┐
+   DIRECTOR                                THE BOX
+   nsec on their device                    ┌──────────────────────────────┐
       │                                     │  Nactor                      │
       │ 1. publish config scope +           │   nsec (SOPS) ─ decrypts ─┐    │
       │    grant → runtime npub             │   npub  ◄─────────────────┘    │
@@ -42,19 +73,25 @@ keypair, and it's what keeps your sovereign key off the box:
 
 | keypair | lives | job | verb |
 | --- | --- | --- | --- |
-| **you** — jaf@ | your device (never on the box) | sign the config/credential scopes | **grant** (authorization) |
-| **the runtime** | on the box, SOPS-sealed | decrypt what you grant it | **receive** |
+| **the Director(s)** — e.g. jaf@ | their device (never on the box) | sign the config/credential scopes and the approvals | **grant** (authorization) |
+| **the runtime** (Nactor) | on the box, SOPS-sealed | decrypt what a Director grants it | **receive** |
 | **the roles** — luke@, nave@ | on the box, SOPS-sealed | sign the actual broadcasts | **act** |
 
-Grant → receive → act. Your key authorizes; the runtime's key reads; the role
-keys do. Your sovereign nsec never touches the box.
+Grant → receive → act. A Director's key authorizes; the runtime's key reads; the
+role keys do. The Director's sovereign nsec never touches the box. There may be
+**more than one Director** (config lists them; any one can act, quorum is a later
+policy) — "Director" here is the human decision-maker, **not** Noir's AI GM
+"Director".
 
 ## Config is desired state, delivered as a grant
 
-You publish the Nact config — identities, channels, routing, risk tiers — as an
-**encrypted scope** and **grant it to the runtime's npub**. It's *desired state*,
-not a command stream: "these identities exist, these channels exist, this is the
-routing." The runtime dereferences it **live** and **reconciles reality to it**.
+You publish the Nact config — **Directors, the Nactor address**, identities,
+channels, routing, risk tiers — as an **encrypted scope** and **grant it to the
+runtime's npub**. It's *desired state*, not a command stream: "these Directors may
+act, this is the runtime, these identities exist, these channels exist, this is
+the routing." The runtime dereferences it **live** and **reconciles reality to
+it** — including *who may authorize it*, so adding a co-Director or repointing at
+a different Nactor is a config edit, never a redeploy.
 
 - Change the config in the app → publish a new version of the scope → the
   runtime reads the current one and converges.
@@ -70,7 +107,7 @@ runtime never speaks NIP-DA itself; it reads its config the way *any* agent read
 delegated data — an MCP tool call:
 
 ```
-you (master) ── grant config-scope ──► runtime's npub          (NIP-DA, over relays)
+a Director ── grant config-scope ──► runtime's npub            (NIP-DA, over relays)
 Nvoy (holds the runtime's nsec) ── dereferences + decrypts the scope, live
    └── exposes it as an MCP tool:  get_config → { identities, channels, routing, tiers }
 Nactor ── calls the MCP tool ── "zero nostr knowledge"
@@ -129,26 +166,35 @@ Perceive and act, both directions, all grants.
 - **No separate auth gate.** The signature on the scope *is* the authorization —
   the runtime accepts config only from your npub, so there's no NIP-98 session to
   mint or CORS to configure.
-- **The browser signs with NIP-07 or NIP-46** — your master key stays in your
+- **The browser signs with NIP-07 or NIP-46** — a Director's key stays in their
   extension or bunker; the app only ever emits signed scopes.
 
 ## Authorization model
 
-The runtime is configured **once** with its master npub (at deploy — one
-constant in SOPS/env). From then on it accepts config and credential grants only
-from that npub. That single trust anchor replaces per-request authentication.
+The runtime is seeded **once** with a **bootstrap Director npub** (at deploy — one
+constant in SOPS/env). That anchor can never be locked out. From then on the
+**effective Director set is the bootstrap ∪ the Directors named in config**, so
+you add or remove co-Directors from the app without touching the box, and the
+anchor guarantees you can't accidentally lock yourself out. The runtime accepts
+config and credential grants — and approvals — only from a Director in that set.
+That trust anchor plus the config-listed Directors replace per-request account
+auth.
 
 ## Honest caveats
 
-- **One bootstrap constant** — the runtime must be told its master npub once.
-  That anchor is the whole trust root; guard it like any deploy secret.
+- **One bootstrap constant** — the runtime must be told its bootstrap Director
+  npub once. That anchor is the whole trust root; guard it like any deploy secret.
+  (Co-Directors added later live in config; the anchor is what can't be locked
+  out.)
 - **Relay latency** — relay round-trips instead of a direct call. Fine for config
   (seconds); the approval queue is already nostr-native via the NIP-59 DM
   adapter, so it fits the same transport.
 - **Secrets at rest** — credential-scopes are decrypted in memory and re-sealed
-  with SOPS on the box; the master key never touches the box.
+  with SOPS on the box; a Director's key never touches the box.
 - **Versioning** — the config scope is replaceable / newest-wins, which is clean
-  for a single master. Multi-admin would need an explicit merge rule.
+  for a single Director. Multiple Directors editing concurrently would need an
+  explicit merge rule (the authorization set already supports many; the *write*
+  path is last-writer-wins today).
 - **Relay availability** — the runtime caches the last-known config and keeps
   running if relays are briefly unreachable; it converges when they return.
 
@@ -161,11 +207,17 @@ target; the endpoints and the app are identical, so the swap is contained.
 | | V1 (built + live) | target (this doc) |
 | --- | --- | --- |
 | runtime identity | reads role keys from env | its own **nsec/npub** |
+| Directors | **in config** (`directors[]`), seeded by a bootstrap env anchor | Director npubs in the config scope |
+| Nactor address | **in config** (`nactorAddress`); the app points at it | the runtime's npub the config is granted to |
 | config **read** | local `nact-config.json` | **Nvoy MCP `get_config`** — a scope granted to it |
-| config **write** | HTTP `PUT /api/config` | publish a new scope version |
-| auth | NIP-98 per request | the signature on the scope *is* the auth |
+| config **write** | HTTP `PUT /api/config` (by a Director) | publish a new scope version |
+| auth | NIP-98 per request, from a configured Director | the signature on the scope *is* the auth |
 | secrets | env / SOPS | credential-scopes via Nvoy MCP |
 | provisioning | identities = env keys | the reconcile loop (on-box key-gen, webhook register) |
+
+Directors-in-config and the Nactor-address pointer are already in the built V1 —
+so the app/runtime decoupling and multi-Director authorization don't wait for the
+grant transport; only the config *transport* migrates.
 
 The migration: point the runtime's config-read at Nvoy's MCP server instead of a
 file, publish config as a scope from the app instead of `PUT`, and turn on the

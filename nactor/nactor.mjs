@@ -1,15 +1,22 @@
 // Nactor — the Nact runtime. A NIP-98-gated HTTP control-plane over the Nact
 // library: the on-box actor that receives config/proposals and enacts.
 //
-// The control-plane app (nact.nave.pub) talks to this. Every /api/* request is
-// authenticated with a NIP-98 event signed by the master's key; only the master
-// pubkey may read the queue, enact, or edit config. Role signing keys come from
-// the environment (SOPS-decrypted on the box) and never leave it.
+// The control-plane app (Nact) talks to this. Every /api/* request is
+// authenticated with a NIP-98 event signed by a Director's key; only a
+// configured Director may read the queue, enact, or edit config. The Director is
+// the human decision-maker (approve or not) — distinct from Noir's AI "Director".
+// Role signing keys come from the environment (SOPS-decrypted on the box) and
+// never leave it.
 //
-//   NACT_MASTER_NPUB=npub1…   # or LUKE_MASTER_NPUB — the only key that may act
+// Directors live in CONFIG (config.directors — one or more npubs), so you add or
+// remove them from the app without redeploying. A single BOOTSTRAP npub is read
+// from the environment as the trust anchor that seeds an empty config and can
+// never be locked out; the effective Director set is bootstrap ∪ config.directors.
+//
+//   NACT_DIRECTOR_NPUB=npub1…  # bootstrap Director (legacy: NACT_MASTER_NPUB / LUKE_MASTER_NPUB)
 //   LUKE_NSEC=… NAVE_NSEC=…    # role keys (each <NAME>_NSEC becomes identity <name>)
 //   LUKE_RELAYS=wss://…        # where enacted events publish
-//   NACT_CONFIG=/data/nact-config.json   # channels / tiers / metadata (persisted)
+//   NACT_CONFIG=/data/nact-config.json   # directors / channels / tiers / metadata (persisted)
 //   NACT_PORT=8791
 //
 // This is the pragmatic V1 transport (HTTP + NIP-98, the same gate Luke's
@@ -36,7 +43,10 @@ function toPub(v) {
   if (/^[0-9a-f]{64}$/i.test(raw)) return raw.toLowerCase()
   return null
 }
-const MASTER = toPub(process.env.NACT_MASTER_NPUB || process.env.LUKE_MASTER_NPUB || '')
+// The bootstrap Director: the trust anchor read from the environment once. It
+// seeds an empty config and can never be locked out — the app can add co-Directors
+// (for quorum) into config.directors, but this one is always authorized.
+const BOOTSTRAP = toPub(process.env.NACT_DIRECTOR_NPUB || process.env.NACT_MASTER_NPUB || process.env.LUKE_MASTER_NPUB || '')
 
 // Role identities from env: every <NAME>_NSEC → identity <name>.
 const IDS = {}
@@ -45,16 +55,32 @@ for (const [k, v] of Object.entries(process.env)) {
   if (m && loadSecret(v)) IDS[m[1].toLowerCase()] = { nsec: v }
 }
 
-const approval = webQueueApproval({ approverPubkey: MASTER })
+// The effective Director set: bootstrap ∪ config.directors (as hex pubkeys). Read
+// live so app edits to config.directors take effect without a restart. Enacting
+// requires being in this set, so webqueue authorizes against it, not one key.
+function directorPubs() {
+  const set = new Set()
+  if (BOOTSTRAP) set.add(BOOTSTRAP)
+  for (const d of (config?.directors || [])) { const p = toPub(d); if (p) set.add(p) }
+  return set
+}
+const isDirector = pub => directorPubs().has(pub)
+
+const approval = webQueueApproval({ isDirector })
 const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 
 // ---- config store (non-secret metadata the app edits) --------------------
+// Config carries the Director(s) and the Nactor's own address alongside the
+// channels/tiers/identity metadata — so the human decision-makers and which
+// runtime this config targets are part of the desired state, not deploy-time env.
 function defaultConfig() {
   const identitiesMeta = {}
   for (const k of Object.keys(IDS)) identitiesMeta[k] = { handle: `${k}@nave.pub`, signer: 'custodial', status: 'active' }
   return {
+    directors: BOOTSTRAP ? [nip19.npubEncode(BOOTSTRAP)] : [],
+    nactorAddress: process.env.NACT_ADDRESS || '',
     identitiesMeta,
-    channels: [{ id: 'web', name: 'Nact app', kind: 'Web queue (NIP-98)', approver: 'master', covers: Object.keys(IDS), status: 'active' }],
+    channels: [{ id: 'web', name: 'Nact app', kind: 'Web queue (NIP-98)', approver: 'director', covers: Object.keys(IDS), status: 'active' }],
     tiers: { 0: 'critical', 1: 'low', 3: 'critical', 5: 'critical', 6: 'low', 7: 'low', 9734: 'elevated', 10002: 'critical' },
   }
 }
@@ -89,22 +115,25 @@ const server = createServer(async (req, res) => {
 
   // Health is public and prints no secrets.
   if (path === '/api/health' && req.method === 'GET') {
-    return json(res, 200, { ok: true, identities: Object.keys(IDS), relays: RELAYS.length, masterConfigured: !!MASTER })
+    return json(res, 200, { ok: true, identities: Object.keys(IDS), relays: RELAYS.length, directorsConfigured: directorPubs().size })
   }
 
-  // Everything else requires NIP-98 from the master.
+  // Everything else requires NIP-98 from a configured Director.
   const bodyRaw = (req.method === 'POST' || req.method === 'PUT') ? await readBody(req) : ''
-  if (!MASTER) return json(res, 503, { error: 'master npub not configured' })
+  if (!directorPubs().size) return json(res, 503, { error: 'no Director configured' })
   const pubkey = verifyNip98(req.headers['authorization'], req.method, path, bodyRaw)
   if (!pubkey) return json(res, 401, { error: 'nip-98 auth required' })
-  if (pubkey !== MASTER) return json(res, 403, { error: 'not the master key' })
+  if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
   let body = {}
   if (bodyRaw) { try { body = JSON.parse(bodyRaw) } catch { return json(res, 400, { error: 'bad json' }) } }
 
   try {
     if (path === '/api/state' && req.method === 'GET') {
       return json(res, 200, {
-        master: nip19.npubEncode(MASTER),
+        director: nip19.npubEncode(pubkey),               // the Director making this request
+        directors: [...directorPubs()].map(p => nip19.npubEncode(p)),
+        nactorAddress: config.nactorAddress || '',
+        bootstrap: BOOTSTRAP ? nip19.npubEncode(BOOTSTRAP) : null,  // the anchor that can't be removed
         identities: await identitiesView(),
         channels: config.channels,
         tiers: config.tiers,
@@ -121,9 +150,17 @@ const server = createServer(async (req, res) => {
       return json(res, 200, out)
     }
     if (path === '/api/config' && req.method === 'PUT') {
-      for (const key of ['channels', 'tiers', 'identitiesMeta']) if (body[key] !== undefined) config[key] = body[key]
+      // Guard against lockout: a Directors edit must keep at least one valid
+      // Director (the bootstrap anchor always counts, so this only bites if
+      // there's no bootstrap and the edit empties the set).
+      if (Array.isArray(body.directors)) {
+        const next = new Set(body.directors.map(toPub).filter(Boolean))
+        if (BOOTSTRAP) next.add(BOOTSTRAP)
+        if (!next.size) return json(res, 400, { error: 'refusing to remove the last Director' })
+      }
+      for (const key of ['directors', 'nactorAddress', 'channels', 'tiers', 'identitiesMeta']) if (body[key] !== undefined) config[key] = body[key]
       saveConfig(config)
-      return json(res, 200, { ok: true, channels: config.channels, tiers: config.tiers })
+      return json(res, 200, { ok: true, directors: [...directorPubs()].map(p => nip19.npubEncode(p)), nactorAddress: config.nactorAddress || '', channels: config.channels, tiers: config.tiers })
     }
     return json(res, 404, { error: 'unknown endpoint' })
   } catch (e) {
@@ -132,7 +169,7 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · master: ${MASTER ? 'set' : 'MISSING'} · relays: ${RELAYS.length}`)
+  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length}`)
 })
 
 export { server, nact, config }
