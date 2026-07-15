@@ -106,7 +106,9 @@ the Nact name:
   agent or app imports.
 - **the app** (nact.nave.pub) — the human **control plane**: construct and
   manage approval channels, and grant or revoke an agent's authority to act. The
-  mirror of Nvoy on the perceive side.
+  mirror of Nvoy on the perceive side. It reaches the runtime not through an HTTP
+  API but by granting it the config as scoped data — see
+  [`docs/architecture.md`](docs/architecture.md).
 
 ### What the app manages
 
