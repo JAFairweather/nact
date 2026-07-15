@@ -103,6 +103,7 @@ function defaultConfig() {
   return {
     directors: BOOTSTRAP ? [nip19.npubEncode(BOOTSTRAP)] : [],
     nactorAddress: process.env.NACT_ADDRESS || '',
+    activations: {},   // name → { by: <director npub>, at } — the Director's signed authorization to act as an on-box identity
     identitiesMeta,
     channels: [{ id: 'web', name: 'Nact app', kind: 'Web queue (NIP-98)', approver: 'director', covers: Object.keys(IDS), status: 'active' }],
     tiers: { 0: 'critical', 1: 'low', 3: 'critical', 5: 'critical', 6: 'low', 7: 'low', 9734: 'elevated', 10002: 'critical' },
@@ -134,6 +135,7 @@ async function identitiesView() {
       key: k, handle: meta.handle || `${k}@nave.pub`, npub,
       signer: meta.signer || 'custodial', status: meta.status || 'active',
       source: IMPORTED.has(k) ? 'imported (credential-scope, in memory)' : 'env (bootstrap fallback)',
+      activated: (config.activations && config.activations[k]) || null,
     })
   }
   return out
@@ -238,6 +240,24 @@ const server = createServer(async (req, res) => {
       }
       CREDS.set(name, { type, target: body.target || null, importedAt: Date.now(), value: secret })
       return json(res, 200, { ok: true, imported: name, type, credentials: credentialsView(), identities: await identitiesView() })
+    }
+
+    // Activate an on-box identity — the Director SIGNS (NIP-98) an authorization
+    // that Nactor may act as this custodial-on-box key. No key material is sent:
+    // the box already holds the role nsec; this is the Director's consent + audit
+    // record, signable from a NIP-07 extension or a NIP-46 phone signer. This is
+    // the phone-friendly path for role keys (vs. issue-credential for secrets the
+    // Director holds). `{name, deactivate:true}` withdraws the authorization.
+    if (path === '/api/activate-identity' && req.method === 'POST') {
+      const name = String(body.name || '').trim()
+      if (!name) return json(res, 400, { error: 'name required' })
+      const known = new Set([...Object.keys(IDS), ...IMPORTED.keys()])
+      if (!known.has(name)) return json(res, 404, { error: `no such on-box identity '${name}'` })
+      if (!config.activations) config.activations = {}
+      if (body.deactivate) { delete config.activations[name]; saveConfig(config); return json(res, 200, { ok: true, deactivated: name, identities: await identitiesView() }) }
+      config.activations[name] = { by: nip19.npubEncode(pubkey), at: Date.now() }
+      saveConfig(config)
+      return json(res, 200, { ok: true, activated: name, by: config.activations[name].by, identities: await identitiesView() })
     }
     return json(res, 404, { error: 'unknown endpoint' })
   } catch (e) {

@@ -217,7 +217,7 @@ function mapState(st){
   S.director=st.director?st.director.slice(0,12)+'…':S.director;
   S.nactorAddress=st.nactorAddress||S.nactorAddress;
   S.directors=(st.directors||[]).map(np=>({npub:np,label:np.slice(0,12)+'…',bootstrap:np===st.bootstrap,verified:true}));
-  S.identities=st.identities.map(i=>({key:i.key,handle:i.handle,npub:i.npub||'',signer:i.signer,status:i.status}));
+  S.identities=st.identities.map(i=>({key:i.key,handle:i.handle,npub:i.npub||'',signer:i.signer,status:i.status,source:i.source,activated:i.activated||null}));
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
@@ -286,11 +286,14 @@ function draw(){
         <h3>${esc(i.handle)}</h3><div class="muted">signs via <b>${i.signer==='custodial'?'custodial key (SOPS-encrypted)':'NIP-46 bunker'}</b></div></div></div>
       <span class="badge ${i.status==='active'?'b-ok':'b-off'}">${i.status}</span></div>
       <div class="kv" style="margin:12px 0 2px">${esc(i.npub)}</div>
+      ${i.activated
+        ? `<div class="hint" style="color:var(--low)">✓ activated — you authorized this key by signature${i.activated.by?` (${esc(i.activated.by.slice(0,14))}…)`:''}</div>`
+        : (i.source&&i.source.indexOf('env')===0 ? `<div class="hint">on-box key — <b>not yet Director-activated</b>. Sign to authorize (no nsec — your signer holds it).</div>` : '')}
       <div class="label">Approved through</div>
       <div class="chips">${chs.length
         ? chs.map(c=>`<span class="chip ${c.status==='active'?'on':''}">🔗 ${esc(c.name)} · ${esc(chanShort(c))}${c.status!=='active'?' (severed)':''}</span>`).join('')
         : `<span class="chip warnchip">⚠ no channel — cannot be approved</span>`}</div>
-      <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}
+      <div class="acts">${LIVE&&!i.activated?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}<button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}
       <div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add identity</h3>
         <div class="muted">Provide the metadata; the key is generated <b>on the box</b> and stored SOPS-encrypted — the browser never sees an nsec.</div>
@@ -399,6 +402,12 @@ function draw(){
   v.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>decide(b.dataset.ok,'enacted'));
   v.querySelectorAll('[data-no]').forEach(b=>b.onclick=()=>decide(b.dataset.no,'rejected'));
   v.querySelectorAll('[data-revoke-id]').forEach(b=>b.onclick=()=>{const i=S.identities.find(x=>x.key===b.dataset.revokeId);i.status='revoked';draw()});
+  v.querySelectorAll('[data-activate]').forEach(b=>b.onclick=async()=>{
+    if(!LIVE){alert('Connect as a Director first.');return;}
+    b.disabled=true;b.textContent='sign in your signer…';
+    try{ await api('POST','/api/activate-identity',{name:b.dataset.activate}); await refresh(); }
+    catch(e){ alert('activate failed: '+e.message); b.disabled=false; b.textContent='✍ Activate (sign)'; }
+  });
   v.querySelectorAll('[data-revoke-ch]').forEach(b=>b.onclick=()=>{const c=S.channels.find(x=>x.id===b.dataset.revokeCh);c.status='severed';draw();syncConfig()});
   v.querySelectorAll('[data-wire]').forEach(b=>b.onclick=()=>{const [ik,cid]=b.dataset.wire.split('|');
     const c=S.channels.find(x=>x.id===cid);const at=c.covers.indexOf(ik);
