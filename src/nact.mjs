@@ -43,6 +43,21 @@ export class Nact {
 
   identityNames() { return Object.keys(this.identities) }
 
+  // Register (or replace) an identity after construction — e.g. a role key
+  // imported at runtime as a credential-scope, held only in memory. Same cfg
+  // shape as the constructor ({ nsec } | { bunker } | { signer }). Returns
+  // true if a usable signer resolved. pk/npub still resolve lazily on first use.
+  addIdentity(name, cfg) {
+    const signer = resolveSigner(cfg)
+    if (!signer) return false
+    this.identities[name] = { signer, pk: null, npub: null }
+    return true
+  }
+
+  // Forget an identity (e.g. its credential-scope was revoked). It can no
+  // longer be proposed or enacted as.
+  removeIdentity(name) { return delete this.identities[name] }
+
   // Resolve (and cache) an identity's pubkey/npub, connecting the signer if
   // this is a remote bunker's first use.
   async _resolve(name) {

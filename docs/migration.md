@@ -33,11 +33,23 @@ The ingest tool below applies exactly this table to a real dotenv.
    are already published (NIP-05) and are the addresses existing nvoy grants point
    at. Their nsecs are **imported** (preserved), not regenerated. Only genuinely
    new identities are born on the box.
-2. **SOPS stays as the at-rest floor.** The target doesn't delete SOPS — it moves
-   the *source of truth* from "a file a human edits in git" to "scopes the Director
-   grants." Nactor decrypts a credential-scope in memory and **re-seals it with
-   SOPS on the box** (defense in depth, per `architecture.md`). The age key and the
-   Nactor nsec are the two bootstrap secrets that stay box-local.
+2. **No env cache — secrets live in Nactor's memory, not a regenerated file.** The
+   tempting intermediate — Nactor decrypts grants and writes them back into a
+   `secrets.env` (or a SOPS file) that services read — is a **dead end**: it
+   recreates the flat-file we're leaving, gives you two sources of truth that
+   drift, and blunts revocation (the cached file stays valid after the grant is
+   rotated). So the target holds decrypted material **in Nactor's memory** and
+   hands it to consumers live. Two consequences:
+   - **Nact domain (role keys):** Nactor is *itself* the consumer — it signs the
+     broadcasts. So an imported role key lives only in Nactor's memory and is used
+     in place; **no file, no cache, nothing on disk.**
+   - **Other services (Phase 3):** they receive secrets from Nactor **in memory**
+     (injected into the process at spawn, or fetched from a local Nactor broker) —
+     never from a file Nactor wrote.
+   The only box-local secrets are the **two bootstrap keys** (the `age` key and
+   Nactor's own nsec). A SOPS-sealed copy of a credential is allowed *only* as
+   Nactor's private, optional restart-resilience cache — never a services-facing
+   env, and off is a valid choice (re-fetch from relays on restart instead).
 3. **One class at a time, reversibly.** Migrate a class, verify the box still
    serves, keep the old env path as a fallback until the grant path is proven —
    the same V1-vs-target discipline already in `architecture.md`.
@@ -69,20 +81,26 @@ only what Nactor *does* with the result differs.
 - **Phase 0 — inventory (this doc + the ingest tool).** Deterministically classify
   the real env into a config document + a secrets manifest. No secrets leave the
   box; the tool emits key *names* and classes, config *values*.
-- **Phase 1 — Nactor as grantee.** Nactor gets its own nsec/npub (SOPS on box).
-  Import the role nsecs (A) as one-time credential-scopes; publish identities.
-  Move D + the Nact-domain slice of E into the config grant. Prove: the app
-  configures identities/channels/directors/routing, Nactor reconciles, approvals
-  flow — with the old env still present as fallback.
-- **Phase 2 — credentials as scopes.** Move B/C to credential-scopes over Nvoy MCP;
-  Nactor decrypts + SOPS-seals + registers the Telegram webhook from the granted
-  token. Drop those keys from `secrets.env`.
-- **Phase 3 — whole-box (optional, Option 2).** Nactor's provisioning actuator
-  writes each service's effective config/secrets from grants and reconciles the
-  running services. `secrets.env` retires to a bootstrap stub (age key + Nactor
-  nsec only).
+- **Phase 1 — Nactor as grantee, role keys into memory.** Nactor gets its own
+  nsec/npub (bootstrap on box). The Director issues each role nsec (A) as a
+  **credential-scope encrypted to Nactor's npub**; Nactor decrypts with its nsec
+  and registers the identity **in memory** — it signs as `luke@`/`nave@` from RAM,
+  no `<NAME>_NSEC` env, nothing written to disk. Directors + the Nact-domain slice
+  of E are the config. The env `<NAME>_NSEC` path remains only as a *bootstrap
+  fallback* until imports are proven, then is removed.
+- **Phase 2 — provider/infra credentials as scopes.** Move B/C to credential-scopes
+  (same encrypt-to-Nactor mechanism, later over Nvoy MCP). Nactor holds them in
+  memory and uses them in place — signs Telegram calls, registers the webhook from
+  the granted bot token — and drops those keys from `secrets.env`. No re-sealed
+  env file.
+- **Phase 3 — whole-box, in-memory brokering (optional, Option 2).** Other services
+  get their secrets from Nactor **in memory** — injected into the process at spawn
+  or fetched from a loopback broker — never from a file Nactor wrote. `secrets.env`
+  retires to a bootstrap stub (the `age` key + Nactor's nsec only).
 
-Each phase leaves the box working and is independently reversible.
+Each phase leaves the box working and is independently reversible. At no point does
+a decrypted secret land in a file a service reads — that intermediate is the thing
+we're explicitly avoiding.
 
 ## The ingest tool
 

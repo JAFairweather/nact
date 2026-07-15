@@ -25,7 +25,7 @@
 import { createServer } from 'node:http'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { getPublicKey, nip19 } from 'nostr-tools'
+import { getPublicKey, nip19, nip44 } from 'nostr-tools'
 import { Nact } from '../src/nact.mjs'
 import { kindInfo } from '../src/inspect.mjs'
 import { loadSecret } from '../src/util/secret.mjs'
@@ -48,11 +48,35 @@ function toPub(v) {
 // (for quorum) into config.directors, but this one is always authorized.
 const BOOTSTRAP = toPub(process.env.NACT_DIRECTOR_NPUB || process.env.NACT_MASTER_NPUB || process.env.LUKE_MASTER_NPUB || '')
 
-// Role identities from env: every <NAME>_NSEC → identity <name>.
+// Role identities from env: every <NAME>_NSEC → identity <name>. These are the
+// bootstrap FALLBACK; the migration (docs/migration.md) replaces them with role
+// keys imported at runtime as credential-scopes, held only in memory.
 const IDS = {}
 for (const [k, v] of Object.entries(process.env)) {
   const m = /^([A-Z][A-Z0-9]*)_NSEC$/.exec(k)
-  if (m && loadSecret(v)) IDS[m[1].toLowerCase()] = { nsec: v }
+  if (m && k !== 'NACTOR_NSEC' && loadSecret(v)) IDS[m[1].toLowerCase()] = { nsec: v }
+}
+
+// Nactor's OWN keypair — the grantee. A Director encrypts credential-scopes TO
+// this npub (NIP-44); Nactor decrypts with this nsec. Bootstrap it on the box
+// (SOPS-sealed) via NACTOR_NSEC. Without it, Nactor can't receive credentials —
+// it still runs on the env fallback, but credential import is disabled.
+const NACTOR_SK = loadSecret(process.env.NACTOR_NSEC || '')
+const NACTOR_PUB = NACTOR_SK ? getPublicKey(NACTOR_SK) : null
+const NACTOR_NPUB = NACTOR_PUB ? nip19.npubEncode(NACTOR_PUB) : null
+
+// In-memory credential store: name → { type, target, importedAt, value }.
+// value is NEVER serialized out of the process — not to a file, not over the
+// API. Role keys additionally register an in-memory signer on `nact`.
+const CREDS = new Map()
+const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the identities view)
+
+// Decrypt a credential-scope: NIP-44 ciphertext from the Director (its pubkey,
+// known from the NIP-98 signature) to Nactor's key. Returns plaintext or throws.
+function decryptScope(enc, directorPub) {
+  if (!NACTOR_SK) throw new Error('NACTOR_NSEC not configured — credential import disabled')
+  const ck = nip44.getConversationKey(NACTOR_SK, directorPub)
+  return nip44.decrypt(enc, ck)
 }
 
 // The effective Director set: bootstrap ∪ config.directors (as hex pubkeys). Read
@@ -100,22 +124,41 @@ const readBody = async req => { let s = ''; for await (const c of req) s += c; r
 
 async function identitiesView() {
   const out = []
-  for (const k of Object.keys(IDS)) {
+  const names = new Set([...Object.keys(IDS), ...IMPORTED.keys()])
+  for (const k of names) {
+    const nsec = IMPORTED.get(k)?.nsec ?? IDS[k]?.nsec
     let npub = null
-    try { npub = nip19.npubEncode(getPublicKey(loadSecret(IDS[k].nsec))) } catch {}
+    try { npub = nip19.npubEncode(getPublicKey(loadSecret(nsec))) } catch {}
     const meta = config.identitiesMeta[k] || {}
-    out.push({ key: k, handle: meta.handle || `${k}@nave.pub`, npub, signer: meta.signer || 'custodial', status: meta.status || 'active' })
+    out.push({
+      key: k, handle: meta.handle || `${k}@nave.pub`, npub,
+      signer: meta.signer || 'custodial', status: meta.status || 'active',
+      source: IMPORTED.has(k) ? 'imported (credential-scope, in memory)' : 'env (bootstrap fallback)',
+    })
   }
   return out
+}
+
+// Credentials summary — NAMES/types/targets only, never values.
+function credentialsView() {
+  return [...CREDS.entries()].map(([name, c]) => ({ name, type: c.type, target: c.target || null, importedAt: c.importedAt }))
 }
 
 const server = createServer(async (req, res) => {
   const path = (req.url || '/').split('?')[0]
   if (!path.startsWith('/api/')) return json(res, 404, { error: 'not found' })
 
-  // Health is public and prints no secrets.
+  // Health is public and prints no secrets. Exposes the Nactor npub so a
+  // Director knows which key to encrypt credential-scopes to.
   if (path === '/api/health' && req.method === 'GET') {
-    return json(res, 200, { ok: true, identities: Object.keys(IDS), relays: RELAYS.length, directorsConfigured: directorPubs().size })
+    return json(res, 200, {
+      ok: true,
+      identities: [...new Set([...Object.keys(IDS), ...IMPORTED.keys()])],
+      relays: RELAYS.length,
+      directorsConfigured: directorPubs().size,
+      nactorNpub: NACTOR_NPUB,                     // the grantee address (public)
+      credentials: CREDS.size,
+    })
   }
 
   // Everything else requires NIP-98 from a configured Director.
@@ -133,8 +176,10 @@ const server = createServer(async (req, res) => {
         director: nip19.npubEncode(pubkey),               // the Director making this request
         directors: [...directorPubs()].map(p => nip19.npubEncode(p)),
         nactorAddress: config.nactorAddress || '',
+        nactorNpub: NACTOR_NPUB,                           // grant credential-scopes to this key
         bootstrap: BOOTSTRAP ? nip19.npubEncode(BOOTSTRAP) : null,  // the anchor that can't be removed
         identities: await identitiesView(),
+        credentials: credentialsView(),
         channels: config.channels,
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
@@ -162,6 +207,38 @@ const server = createServer(async (req, res) => {
       saveConfig(config)
       return json(res, 200, { ok: true, directors: [...directorPubs()].map(p => nip19.npubEncode(p)), nactorAddress: config.nactorAddress || '', channels: config.channels, tiers: config.tiers })
     }
+
+    // Import (or revoke) a credential-scope. The Director NIP-44-encrypts the
+    // secret TO Nactor's npub and PUTs { name, type, enc } (the NIP-98 signature
+    // identifies the Director, so Nactor derives the shared key from it). The
+    // secret is decrypted and held ONLY in memory — never written to disk, never
+    // returned by the API. A role-key additionally registers an in-memory signer.
+    // Revoke with { name, revoke: true }.
+    if (path === '/api/credential' && req.method === 'PUT') {
+      const name = String(body.name || '').trim()
+      if (!name) return json(res, 400, { error: 'name required' })
+      if (body.revoke) {
+        CREDS.delete(name)
+        if (IMPORTED.has(name)) { IMPORTED.delete(name); nact.removeIdentity(name) }
+        return json(res, 200, { ok: true, revoked: name, credentials: credentialsView() })
+      }
+      if (!NACTOR_NPUB) return json(res, 503, { error: 'NACTOR_NSEC not configured — credential import disabled' })
+      if (!body.enc) return json(res, 400, { error: 'enc (NIP-44 ciphertext to the Nactor npub) required' })
+      let plaintext
+      try { plaintext = decryptScope(body.enc, pubkey) } catch (e) { return json(res, 400, { error: 'decrypt failed: ' + (e?.message || 'bad ciphertext') }) }
+      // plaintext may be a bare secret, or JSON { nsec | secret, handle? }.
+      let secret = plaintext, extra = {}
+      try { const o = JSON.parse(plaintext); if (o && typeof o === 'object') { secret = o.nsec || o.secret || plaintext; extra = o } } catch {}
+      const type = String(body.type || 'secret')
+      if (type === 'role-key') {
+        if (!loadSecret(secret)) return json(res, 400, { error: 'role-key scope did not contain a usable nsec' })
+        if (!nact.addIdentity(name, { nsec: secret })) return json(res, 400, { error: 'could not register signer' })
+        IMPORTED.set(name, { nsec: secret, importedAt: Date.now() })
+        if (extra.handle) { config.identitiesMeta[name] = { ...(config.identitiesMeta[name] || {}), handle: extra.handle, signer: 'custodial', status: 'active' }; saveConfig(config) }
+      }
+      CREDS.set(name, { type, target: body.target || null, importedAt: Date.now(), value: secret })
+      return json(res, 200, { ok: true, imported: name, type, credentials: credentialsView(), identities: await identitiesView() })
+    }
     return json(res, 404, { error: 'unknown endpoint' })
   } catch (e) {
     return json(res, 500, { error: e?.message || 'error' })
@@ -169,7 +246,7 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length}`)
+  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length} · nactor key: ${NACTOR_NPUB ? NACTOR_NPUB.slice(0, 16) + '…' : 'MISSING (credential import disabled)'}`)
 })
 
 export { server, nact, config }
