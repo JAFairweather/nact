@@ -1,9 +1,13 @@
 # Nact architecture — how the app talks to the runtime
 
-**Status: design, not built.** The runtime reconciler and endpoints don't exist
-yet. But every primitive this stands on already runs in the ecosystem today:
-NIP-DA scoped grants (via Nvoy), NIP-59 DMs, SOPS on the box, and NIP-07/NIP-46
-signing in the browser.
+**This doc describes the target** — config delivered to the runtime as scoped
+data over Nvoy. A **pragmatic V1 of the same shape is built and live** (see
+`../server/`): identical endpoints and app, but the transport is HTTP + NIP-98
+and the config lives in a local file instead of a grant. The two reconcile at
+the end of this doc; the migration is contained (swap the config store's
+read/write, keep everything else). Every primitive the target stands on already
+runs in the ecosystem today: NIP-DA scoped grants (via Nvoy's MCP server),
+NIP-59 DMs, SOPS on the box, and NIP-07/NIP-46 signing in the browser.
 
 ## The short version
 
@@ -58,6 +62,24 @@ routing." The runtime dereferences it **live** and **reconciles reality to it**.
   any Nvoy data.
 
 It's GitOps, but the "git" is a nostr scoped grant under your key.
+
+### How the grant actually reaches the runtime: Nvoy's MCP server
+
+Nvoy doesn't serve data over HTTP — it **mounts as an MCP server**. So the
+runtime never speaks NIP-DA itself; it reads its config the way *any* agent reads
+delegated data — an MCP tool call:
+
+```
+you (master) ── grant config-scope ──► runtime's npub          (NIP-DA, over relays)
+Nvoy (holds the runtime's nsec) ── dereferences + decrypts the scope, live
+   └── exposes it as an MCP tool:  get_config → { identities, channels, routing, tiers }
+Nact runtime ── calls the MCP tool ── "zero nostr knowledge"
+```
+
+Nvoy handles the decrypt, the live-dereference, and revocation; the runtime just
+gets current config JSON. The bot-token **credential-scope** arrives the same way
+(another MCP-served scope). Rotate the grant → the MCP tool returns nothing → the
+runtime is deconfigured.
 
 ### The reconcile loop (what the runtime does)
 
@@ -129,6 +151,25 @@ from that npub. That single trust anchor replaces per-request authentication.
   for a single master. Multi-admin would need an explicit merge rule.
 - **Relay availability** — the runtime caches the last-known config and keeps
   running if relays are briefly unreachable; it converges when they return.
+
+## V1 (built) vs the target
+
+The V1 runtime proves the *pipeline* (propose → WYSIWYS enact → broadcast) with
+real keys and a real gate. Only the config store's read/write differs from the
+target; the endpoints and the app are identical, so the swap is contained.
+
+| | V1 (built + live) | target (this doc) |
+| --- | --- | --- |
+| runtime identity | reads role keys from env | its own **nsec/npub** |
+| config **read** | local `nact-config.json` | **Nvoy MCP `get_config`** — a scope granted to it |
+| config **write** | HTTP `PUT /api/config` | publish a new scope version |
+| auth | NIP-98 per request | the signature on the scope *is* the auth |
+| secrets | env / SOPS | credential-scopes via Nvoy MCP |
+| provisioning | identities = env keys | the reconcile loop (on-box key-gen, webhook register) |
+
+The migration: point the runtime's config-read at Nvoy's MCP server instead of a
+file, publish config as a scope from the app instead of `PUT`, and turn on the
+reconcile loop. The NIP-98 HTTP path can stay as a fallback/local transport.
 
 ## How it relates to the rest
 
