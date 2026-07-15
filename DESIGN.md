@@ -44,8 +44,12 @@ back through the same ack channel, not a crash.
 
 An approval adapter implements:
 
-- `send({ id, identity, npub, draft, context }) → boolean` — deliver the
-  Approve/Reject prompt to the human; return whether it was delivered.
+- `send({ id, identity, npub, draft, context, fingerprint, report }) → boolean`
+  — deliver the Approve/Reject prompt to the human; return whether it was
+  delivered. `fingerprint` is the event id of the frozen bytes (re-checked before
+  signing); `report` is the WYSIWYS inspection (`kindLabel`, `risk`, `tags`,
+  `warnings`) — render it so the human sees the *actual* action. See
+  `docs/threat-model.md`.
 - `parseDecision(raw) → { id, verb, approver } | null` — turn the channel's
   callback payload into a decision.
 - `isApprover(approver) → boolean` — is this the authorized human?

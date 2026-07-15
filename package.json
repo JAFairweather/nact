@@ -8,7 +8,8 @@
     "./adapters/telegram": "./src/adapters/telegram.mjs",
     "./adapters/nostr-dm": "./src/adapters/nostr-dm.mjs",
     "./signers/custodial": "./src/signers/custodial.mjs",
-    "./signers/nip46": "./src/signers/nip46.mjs"
+    "./signers/nip46": "./src/signers/nip46.mjs",
+    "./inspect": "./src/inspect.mjs"
   },
   "keywords": ["nostr", "ai", "agent", "human-in-the-loop", "nip-17", "nip-46", "nip-59", "sovereignty", "nact", "nave"],
   "license": "MIT",

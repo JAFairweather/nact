@@ -9,11 +9,12 @@
 //     this host, your explicit choice) or NIP-46 (a remote bunker; the key
 //     stays on your device and Nact never sees it).
 
-import { nip19 } from 'nostr-tools'
+import { nip19, getEventHash } from 'nostr-tools'
 import { SimplePool } from 'nostr-tools/pool'
 import { randomBytes } from 'node:crypto'
 import { custodialSigner } from './signers/custodial.mjs'
 import { nip46Signer } from './signers/nip46.mjs'
+import { inspect } from './inspect.mjs'
 
 export class Nact {
   // identities: { name: cfg } where cfg is one of
@@ -29,7 +30,7 @@ export class Nact {
     this.relays = relays
     this.ttlMs = ttlMs
     this.pool = new SimplePool()
-    this.pending = new Map()          // id → { identity, draft, created }
+    this.pending = new Map()          // id → { identity, unsigned, fingerprint, created }
     this.identities = {}
     for (const [name, cfg] of Object.entries(identities)) {
       const signer = resolveSigner(cfg)
@@ -63,11 +64,23 @@ export class Nact {
     const id = randomBytes(6).toString('base64url')
     const tags = event.tags ? [...event.tags] : []
     if (replyTo) tags.push(['e', replyTo, '', 'root'])
-    const draft = { kind: event.kind, content: event.content ?? '', tags }
-    this.pending.set(id, { identity, draft, created: Date.now() })
-    const sent = await this.approval.send({ id, identity, npub: idn.npub, draft, context })
+    // Freeze the FULL event now — created_at and pubkey included — so its id is
+    // fully determined at approval time and can be re-checked before signing.
+    // (WYSIWYS: what's shown is exactly what will be signed. See docs/threat-model.md.)
+    const unsigned = {
+      pubkey: idn.pk,
+      created_at: Math.floor(Date.now() / 1000),
+      kind: event.kind,
+      tags,
+      content: event.content ?? '',
+    }
+    const fingerprint = getEventHash(unsigned)
+    const report = inspect(unsigned)
+    this.pending.set(id, { identity, unsigned, fingerprint, created: Date.now() })
+    const draft = { kind: unsigned.kind, content: unsigned.content, tags: unsigned.tags }
+    const sent = await this.approval.send({ id, identity, npub: idn.npub, draft, context, fingerprint, report })
     if (!sent) { this.pending.delete(id); throw new Error('nact: approval delivery failed') }
-    return { id, status: 'awaiting-approval' }
+    return { id, status: 'awaiting-approval', fingerprint, risk: report.risk }
   }
 
   // Feed the raw approval-channel payload (e.g. a Telegram webhook body).
@@ -89,15 +102,22 @@ export class Nact {
     if (verb !== 'ok') { await this.approval.ack({ id, result: { rejected: true } }); return { enacted: false, why: 'rejected' } }
 
     const idn = await this._resolve(p.identity)
-    const unsigned = { ...p.draft, pubkey: idn.pk, created_at: Math.floor(Date.now() / 1000) }
     let signed
     try {
-      signed = await idn.signer.sign(unsigned)
+      // Sign the EXACT frozen bytes that were shown and approved — never a
+      // freshly-built event.
+      signed = await idn.signer.sign(p.unsigned)
     } catch (e) {
       // A NIP-46 bunker can decline or time out — that's a legitimate second
       // veto, not a crash. Report it back through the same ack channel.
       await this.approval.ack({ id, result: { error: `signer: ${e?.message || 'declined'}` } })
       return { enacted: false, why: 'signer declined' }
+    }
+    // WYSIWYS gate: the signed event must be byte-identical to what was approved.
+    // If a signer returned anything else (mutation, re-stamped fields), refuse.
+    if (signed.id !== p.fingerprint) {
+      await this.approval.ack({ id, result: { error: 'signed event diverged from approved (fingerprint mismatch)' } })
+      return { enacted: false, why: 'fingerprint mismatch' }
     }
     const results = await Promise.allSettled(this.pool.publish(this.relays, signed))
     const seen = results.filter(r => r.status === 'fulfilled').length

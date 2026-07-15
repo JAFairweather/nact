@@ -39,13 +39,18 @@ export function nostrDmApproval({ channelNsec, approver, relays = [] } = {}) {
     channelPubkey: channelPk,
     channelNpub: nip19.npubEncode(channelPk),
 
-    async send({ id, identity, npub, draft, context }) {
-      const text =
-        `📝 Enact as ${identity}  (${npub.slice(0, 16)}…)\n\n` +
-        `${draft.content}` +
-        (context ? `\n\n— ${context}` : '') +
-        `\n\n↩︎ reply:  ok ${id}   ·   no ${id}`
-      try { return await dm(text) } catch (e) { console.warn('nact/nostr-dm send:', e?.message); return false }
+    async send({ id, identity, npub, draft, context, fingerprint, report }) {
+      const rep = report || {}
+      const badge = rep.risk === 'critical' ? '🔴 CRITICAL' : rep.risk === 'elevated' ? '🟡 elevated' : '🟢 low'
+      const L = [`📝 Enact as ${identity} · ${badge}  (${npub.slice(0, 16)}…)`, '']
+      L.push(rep.kindLabel || `kind ${draft.kind}`)
+      if (draft.content) L.push(draft.content)
+      if (rep.tags && rep.tags.length) L.push(`tags: ${rep.tags.map(t => t.join(':')).join('  ')}`)
+      for (const w of (rep.warnings || [])) L.push(`⚠ ${w}`)
+      if (context) L.push(`— context (not published): ${context}`)
+      if (fingerprint) L.push(`id ${fingerprint.slice(0, 16)}… (verify on your signer)`)
+      L.push(`\n↩︎ reply:  ok ${id}   ·   no ${id}`)
+      try { return await dm(L.join('\n')) } catch (e) { console.warn('nact/nostr-dm send:', e?.message); return false }
     },
 
     // `raw` is a kind-1059 gift wrap (from listen). Unwrap it, confirm it's a

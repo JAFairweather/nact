@@ -23,13 +23,26 @@ export function telegramApproval({ botToken, approverId, webhookSecret } = {}) {
       return !webhookSecret || headers['x-telegram-bot-api-secret-token'] === webhookSecret
     },
 
-    async send({ id, identity, npub, draft, context }) {
-      const body = `📝 <b>Enact as ${esc(identity)}</b>\n<code>${esc(npub.slice(0, 16))}…</code>\n\n`
-        + `${esc(draft.content)}${context ? `\n\n<i>${esc(context)}</i>` : ''}`
+    async send({ id, identity, npub, draft, context, fingerprint, report }) {
+      const rep = report || {}
+      const risk = rep.risk || 'low'
+      const badge = risk === 'critical' ? '🔴 CRITICAL' : risk === 'elevated' ? '🟡 elevated' : '🟢 low'
+      const L = [`📝 <b>Enact as ${esc(identity)}</b> · ${badge}`, `<code>${esc(npub.slice(0, 16))}…</code>`, '']
+      L.push(`<b>${esc(rep.kindLabel || 'kind ' + draft.kind)}</b>`)
+      if (draft.content) L.push(esc(draft.content))
+      if (rep.tags && rep.tags.length) L.push(`\n<i>tags:</i> <code>${esc(rep.tags.map(t => t.join(':')).join('  '))}</code>`)
+      for (const w of (rep.warnings || [])) L.push(`⚠️ ${esc(w)}`)
+      if (context) L.push(`\n<i>context (not published): ${esc(context)}</i>`)
+      if (fingerprint) L.push(`\n<code>id ${esc(fingerprint.slice(0, 16))}…</code> — verify this matches your signer`)
+      const body = L.join('\n')
+      // Critical actions ideally step up to sign-on-device (a web_app button →
+      // the bunker); until that ships, the badge + full render + fingerprint are
+      // the WYSIWYS surface. See docs/threat-model.md.
+      const okLabel = risk === 'critical' ? '🔐 Verify & enact' : '✅ Approve & enact'
       const r = await tg('sendMessage', {
         chat_id: approverId, text: body, parse_mode: 'HTML',
         reply_markup: { inline_keyboard: [[
-          { text: '✅ Approve & enact', callback_data: `ok:${id}` },
+          { text: okLabel, callback_data: `ok:${id}` },
           { text: '❌ Reject', callback_data: `no:${id}` },
         ]] },
       })
