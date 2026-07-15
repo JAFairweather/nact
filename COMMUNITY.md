@@ -33,8 +33,11 @@ Meeting nostr where it is makes adoption frictionless:
 - **NIP-05** — Nact will publish a handle (`nact@nave.pub`) so the project has a
   followable identity for release notes and demos (see "Give Nact a face").
 - **Future NIP fit** — the proposal→enact flow generalizes cleanly to a small
-  spec (an "action request" event kind + an "enact" response). If there's
-  appetite, draft it as a NIP so approval UX can be standardized across clients.
+  spec: an action-proposal event kind + an approval response. If cross-client
+  approval demand shows up, it could be drafted as a NIP — **Scoped Action
+  Approvals** — so approval UX standardizes across clients. Sketched
+  (non-normative) in [`docs/scoped-action-approvals.md`](docs/scoped-action-approvals.md);
+  Nact is software today and needs no NIP to work.
 
 ## First moves (in order)
 
