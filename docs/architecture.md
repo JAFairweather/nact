@@ -146,6 +146,35 @@ E2E-encrypted to the runtime's npub, live, revocable. The runtime decrypts, uses
 and **SOPS-seals at rest** (defense in depth). The secret never sits in a
 database and is never echoed back to the browser.
 
+## Director channel-authority grants (a sibling of the config grant)
+
+The config grant above answers *what plumbing exists* (identities, channels,
+routing) and comes from the **owner**. A second family of grants answers *who may
+approve over which channel*, and comes from each **Director** — independently, per
+channel, revocably.
+
+A Director issues a **channel-authority grant** to the runtime's npub: a scope,
+signed by the Director's nsec, naming one verified channel and the authority it
+carries (`{ channel, delivery_proof, authority: {identities, tiers}, expires }` —
+full schema and the issue/verify/revoke sequence in
+[`threat-model.md`](threat-model.md) → "Channel authority as a scoped grant").
+The runtime **dereferences it live, exactly as it reads its config** — another
+scope served over Nvoy's MCP:
+
+```
+owner    ── grant: config-scope ──────────────▶ runtime npub   (what exists)
+Director ── grant: channel-authority-scope ───▶ runtime npub   (who may approve, scoped)
+Nvoy MCP ── dereferences both, live; revocation on either propagates on next read
+runtime  ── honors a channel's approval ONLY while a live authority grant covers it
+```
+
+This keeps a clean **separation of powers**: the owner can wire a channel to a
+Director, but cannot manufacture that Director's authority — it originates only
+from the Director's own signed grant, and dies on the Director's own key rotation,
+without the owner's involvement. It's the same "GitOps under your key" model as
+the config grant, applied to authority: *revocation is a key rotation*, now for
+*who may act*, not just *what data flows*.
+
 ## The reverse channel: status as a grant back to you
 
 The app also needs to *read* — the pending queue, a new identity's npub, whether

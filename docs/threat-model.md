@@ -193,6 +193,81 @@ mapping is a separate assurance (NIP-05, a prior relationship, out-of-band
 confirmation) and no channel binding supplies it — keep the two distinct so the
 handshake is not over-claimed.
 
+### Channel authority as a scoped grant (the executable binding)
+
+Don't store the binding as a static proof in the owner's config. Make it a **live,
+revocable, scoped grant the Director issues to the Nactor** — the same NIP-DA
+primitive the whole stack runs on. This applies the Nave thesis ("revocation
+isn't a policy, it's a key rotation") to *approval authority itself*.
+
+**The grant.** Grantor = the Director (signs with their nsec — the key-control
+proof); grantee = the Nactor (the scope is encrypted to its npub, gift-wrapped
+per NIP-59); payload = the verified metadata for **one channel**:
+
+```
+{
+  director: npub_luke,
+  nactor:   npub_nactor,
+  channel:  { type: "telegram", id: "12345", label: "Luke · ops" },
+  delivery_proof: { nonce, echoed_at },              // from the ceremony (tap channels)
+  authority: { identities: ["scout"], tiers: ["low","elevated"] },  // SCOPED
+  expires:  <NIP-40 timestamp>,
+  purpose:  "approval delivery + authority for this Nactor"
+}
+// signed by the Director's nsec → key-control + channel-naming + consent, in one artifact
+```
+
+Because it's signed by the Director *and* names the channel, the grant **is** the
+binding proof — the three properties above travel inside a live grant instead of a
+dead attestation.
+
+**Issue → verify (per channel).**
+
+1. Owner invites the Director → routes proposals to the *claimed* channel →
+   `pending`.
+2. Nactor delivers a **nonce over that channel**.
+3. The Director (in a client / Mini App) receives the nonce *over the channel*,
+   folds it into the scope, signs, and **gift-wraps the grant to the Nactor**.
+4. Nactor dereferences it (over Nvoy's MCP, exactly as it reads its config) → the
+   channel flips **pending → verified**, carrying the Director's *scoped* authority.
+
+For a nostr-DM / NIP-46 channel the channel *is* the key, so steps 2–3 collapse —
+the grant is essentially the first signed reply. The grant model is for the
+out-of-band channels.
+
+**Honor rule (deliver-but-don't-honor, live).** On every approval over a channel
+the Nactor **dereferences the live grant**:
+
+- no live grant (never issued / expired / revoked) → **don't honor** (it may still
+  *deliver* there, but a tap over an unbound channel is refused);
+- live grant whose `authority` scope covers this proposal (agent-identity + risk
+  tier) → honor as the Director's approval;
+- `critical` tier isn't granted to tap channels, so it falls through to
+  sign-on-device (bunker). The scoped grant *is* how per-channel risk routing is
+  expressed.
+
+**Revoke.** A **key rotation on that one channel's grant** (or a NIP-DA revocation
+event): the Nactor's next dereference returns nothing → the channel reverts to
+don't-honor, instantly. Each channel is its **own scope key**, so revoking Luke's
+Telegram touches neither his nostr-DM binding nor anyone else's — and the Director
+can withdraw *their own* authority without config-edit access to the Nactor. The
+authority literally originates from the Director's signed, revocable grant, never
+from an npub the configurer typed — which is what makes "you can't implicate
+someone" airtight.
+
+**Separation of powers.** Owner config = which channels/identities/routing exist;
+Director grants = authority to approve over a verified channel, scoped and
+revocable. Neither forges nor silently outlives the other. And the owner's
+"invite" is precisely a *request* for a channel-authority grant; the Director
+"accepting" is *issuing* it — the request-is-a-grant-and-enact symmetry (see
+`nostr-scoped-data-grants/FUTURE.md`).
+
+*Caveats:* revocation takes effect on the next dereference + relay propagation
+(seconds) — critical enacts should force a fresh dereference, not a cache; the
+nonce-over-channel ceremony is not eliminated for tap channels, only *packaged*
+(made live + revocable) by the grant; per-channel keys are the cost of granular
+revoke.
+
 ## Implementation plan (phased)
 
 - **Phase 1 — library (cheap, do first).** Freeze `created_at` at propose;
@@ -209,12 +284,18 @@ handshake is not over-claimed.
   identity/kind.
 - **Phase 4 — protocol.** The public `approval` tag for third-party
   verifiability (Scoped Action Approvals), once cross-client demand appears.
-- **Phase 5 — channel binding.** Model Directors as
-  `(npub, channel, binding-proof, status)`. nostr-DM/NIP-46 self-bind on first
-  signed reply. Out-of-band channels run the nonce-over-channel + signed,
-  channel-named challenge; store the proof. Nactor **delivers to `pending`
-  channels but honors approvals only from `verified` ones.** The control-plane
-  app frames "add Director" as an **invite** and shows `pending → verified`.
+- **Phase 5 — channel binding, as a scoped grant.** Model each verified channel
+  as a **Director-issued, revocable, scoped grant** (schema + sequence in
+  "Channel authority as a scoped grant" above), not a static config proof.
+  nostr-DM/NIP-46 self-bind on first signed reply; out-of-band channels run the
+  nonce-over-channel ceremony, and the Director gift-wraps the resulting
+  channel-authority grant to the Nactor. The Nactor **dereferences the live grant
+  on each approval** — delivers to `pending` channels but honors approvals only
+  where a live grant's `authority` scope covers the proposal. Revocation is a
+  per-channel key rotation, owned by the Director. The control-plane app frames
+  "add Director" as an **invite** and shows `pending → verified`; the runtime
+  reads these grants the same way it reads its config (Nvoy MCP — see
+  `architecture.md`).
 
 ## Reporting
 
