@@ -110,6 +110,89 @@ So: low-risk items keep the one-tap `callback_data` button; **critical items
 replace it with a `web_app` "Sign in your bunker" button** that routes the exact
 event to the signing device.
 
+## The second threat: unbound approvers — who is really approving?
+
+WYSIWYS (above) protects **what** is signed. A separate guarantee protects
+**who** approves: that an approval attributed to a Director was actually produced
+by the holder of that Director's key, over a channel that key-holder consented to.
+
+### The threat: a config entry is not consent
+
+Adding a Director is two independent acts — **authorizing** an npub (an allowlist
+entry: "honor a valid signature from this key") and **routing** a channel to them
+(a delivery path). A naïve entry is just `(npub, channel)` — **two identifiers
+with no cryptographic relationship.** "npub1luke…" and "Telegram chat 12345" are
+strings the *configurer* typed; nothing about the channel id is derivable from, or
+provable against, the key. So:
+
+- **You cannot know an out-of-band channel reaches the key-holder.** Delivery to a
+  channel proves nothing about who is on the other end; possession of a key proves
+  nothing about which channels reach them. They are independent until someone
+  staples them together — and only the key-holder can do that honestly.
+- **A channel-tap can be mis-attributed to a key that never signed.** A Telegram
+  "Approve" is authenticated by *Telegram delivery*, not by the Director's nostr
+  key — and the configurer holds the bot token. So a callback saying "Luke
+  approved" is only as trustworthy as a bot the configurer controls. That is not
+  cryptography binding Luke; it is the system mis-attributing a tap to a key.
+
+The principle: **a Director's authority must be anchored in their key, never in a
+channel someone else controls.** An npub in config is *inert until they sign* —
+which means it cannot be used to forge their approval, but it also means an
+out-of-band channel bound to it must be *proven*, not asserted.
+
+### The free case: the channel that *is* the key
+
+For a **nostr-native channel (NIP-59 DM / NIP-46)**, the channel address and the
+npub are the same object: a gift-wrapped DM is encrypted to the key (only the
+nsec-holder opens it) and the reply is signed by that key. Delivery and
+authentication are one act — **binding is intrinsic.** This is why nostr-DM /
+NIP-46 is the default path for a real co-Director: "add Luke" reduces to "encrypt
+to Luke's key, honor Luke's signature," impossible to fake and inert until he acts.
+
+### The binding ceremony (for Telegram, email, Signal, …)
+
+To bind an out-of-band channel, one **signed loop proves three things at once**:
+
+1. **The channel reaches the key-holder** — deliver a fresh **nonce over the
+   channel** (post a code into the chat). It can only be echoed by whoever
+   received it there.
+2. **They hold the key** — they **sign** with the nsec for the claimed npub.
+3. **They consent to *this* channel** — the signed statement **names the channel
+   explicitly**: *"I, npub X, accept Director authority on Nactor Z, over Telegram
+   chat 12345, nonce=…"* — so consent is channel-specific and phishing-resistant
+   (not a blank "I'm a Director").
+
+The configurer cannot forge it: without the Director's nsec they can't complete
+step 2, and the Director won't sign a statement naming a channel they don't hold.
+
+### The data model and lifecycle
+
+A Director entry is therefore never `(npub, channel)` alone — it is
+`(npub, channel, binding-proof)`, with a status:
+
+| channel type | binding | status when added |
+| --- | --- | --- |
+| nostr-DM / NIP-46 | intrinsic (channel = key) | **verified** on first signed reply |
+| Telegram / out-of-band | the signed, channel-named challenge above | **pending** until completed |
+
+- **Adding by npub + out-of-band handle is an *invitation*, not an authorization.**
+  It routes proposals to a *claimed* channel and nothing more.
+- **Unbound (`pending`) = deliver-but-don't-honor.** Nactor may *send* proposals to
+  a pending channel, but must **refuse any approval that arrives over it**, because
+  it cannot attribute that approval to the key. Only a `verified` binding lets a
+  channel's approval count.
+- The V1 web-queue path is already safe here: every enact is **NIP-98 signed by the
+  Director's key**, so the channel *is* a signature — self-binding, like nostr-DM.
+  The exposure is strictly the out-of-band adapters.
+
+### The honest boundary
+
+The ceremony proves *this key ↔ this channel ↔ consent*. It does **not** prove
+that npub1luke… is the real-world human you mean by "Luke." That key-to-person
+mapping is a separate assurance (NIP-05, a prior relationship, out-of-band
+confirmation) and no channel binding supplies it — keep the two distinct so the
+handshake is not over-claimed.
+
 ## Implementation plan (phased)
 
 - **Phase 1 — library (cheap, do first).** Freeze `created_at` at propose;
@@ -126,6 +209,12 @@ event to the signing device.
   identity/kind.
 - **Phase 4 — protocol.** The public `approval` tag for third-party
   verifiability (Scoped Action Approvals), once cross-client demand appears.
+- **Phase 5 — channel binding.** Model Directors as
+  `(npub, channel, binding-proof, status)`. nostr-DM/NIP-46 self-bind on first
+  signed reply. Out-of-band channels run the nonce-over-channel + signed,
+  channel-named challenge; store the proof. Nactor **delivers to `pending`
+  channels but honors approvals only from `verified` ones.** The control-plane
+  app frames "add Director" as an **invite** and shows `pending → verified`.
 
 ## Reporting
 

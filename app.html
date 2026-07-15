@@ -163,7 +163,7 @@ const S = {
   // Directors — the human decision-maker(s) who approve or reject. Part of the
   // config, not the box's env. (Distinct from Noir's AI "Director".)
   directors: [
-    { npub:'npub1gqg2csuzqmwpqqvts99786spefkf90xz96t3n6zp6fqnk2r74pxs4tcgrg', label:'jaf@dequalsf.com', bootstrap:true },
+    { npub:'npub1gqg2csuzqmwpqqvts99786spefkf90xz96t3n6zp6fqnk2r74pxs4tcgrg', label:'jaf@dequalsf.com', bootstrap:true, verified:true },
   ],
   // The Nactor this config targets — the runtime that applies it. Can be this
   // box or a remote one; the app just points at its address.
@@ -216,7 +216,7 @@ async function api(method,path,body){const s=body?JSON.stringify(body):'';const 
 function mapState(st){
   S.director=st.director?st.director.slice(0,12)+'…':S.director;
   S.nactorAddress=st.nactorAddress||S.nactorAddress;
-  S.directors=(st.directors||[]).map(np=>({npub:np,label:np.slice(0,12)+'…',bootstrap:np===st.bootstrap}));
+  S.directors=(st.directors||[]).map(np=>({npub:np,label:np.slice(0,12)+'…',bootstrap:np===st.bootstrap,verified:true}));
   S.identities=st.identities.map(i=>({key:i.key,handle:i.handle,npub:i.npub||'',signer:i.signer,status:i.status}));
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
@@ -243,7 +243,7 @@ const chanShort = c=>c.kind.split(' ')[0];   // "Telegram" / "NIP-59"
 
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  const defs=[['queue','Queue',S.queue.length],['identities','Identities'],['channels','Channels'],['routing','Routing'],['directors','Directors'],['policy','Policy'],['history','History']];
+  const defs=[['queue','Queue',S.queue.length],['identities','Agent Identities'],['channels','Channels'],['routing','Routing'],['directors','Directors'],['deployment','Deployment'],['policy','Policy'],['history','History']];
   for(const [k,label,n] of defs){
     const b=$(`<button class="tab ${k===tab?'on':''}">${label}${n?`<span class="n">${n}</span>`:''}</button>`);
     b.onclick=()=>{tab=k;draw()}; t.appendChild(b);
@@ -279,7 +279,7 @@ function draw(){
       : `<div class="empty">Nothing awaiting approval. The agent will propose when it has something worth posting.</div>`;
   }
   if(tab==='identities'){
-    h=`<div class="grid">${S.identities.map(i=>{
+    h=`<div class="muted" style="margin:0 0 14px">The nostr identities your agent may <b>act as</b> — each signs the events it proposes. Custodial keys live on the box (SOPS-encrypted); NIP-46 identities keep their key on your device. Wire them to approval channels in <b>Routing</b>.</div><div class="grid">${S.identities.map(i=>{
       const chs=channelsFor(i.key);
       return `<div class="card"><div class="row between">
       <div class="row"><span class="avatar">${i.handle[0].toUpperCase()}</span><div>
@@ -317,28 +317,47 @@ function draw(){
   }
   if(tab==='directors'){
     h=`<div class="card">
-      <h3>Nactor address</h3>
-      <div class="muted" style="margin:2px 0 10px">The runtime this config targets — the box that applies your identities, channels, and routing, and holds the queue. It can be this box or a remote one; the app just points at its address.</div>
-      <div class="form" style="max-width:560px;margin-top:0">
-        <label>Address</label><input id="na-addr" placeholder="https://nact.nave.pub/api" value="${esc(S.nactorAddress||'')}">
-        <button class="btn primary" id="na-save">Save address</button>
-        <div class="note">Same box as this app, or another entirely — the runtime is decoupled from where you configure it.</div>
-      </div></div>
-      <div class="card" style="margin-top:14px">
       <h3>Directors</h3>
-      <div class="muted" style="margin:2px 0 12px">The human decision-maker(s) who approve or reject a proposal before it's signed. Any one Director can enact (m-of-n quorum is a later policy). Part of the config — add or remove them here, no box access needed. <b>Not</b> Noir's AI "Director".</div>
-      <div class="grid">${S.directors.map(d=>`<div class="card" style="padding:14px"><div class="row between">
+      <div class="muted" style="margin:2px 0 12px">The human decision-maker(s) who approve or reject a proposal before it's signed — <b>not</b> Noir's AI "Director". Adding an npub is an <b>invitation</b>, not authorization: a Director's authority is inert until they approve by <b>signing with their own key</b>, so you can't implicate anyone. A nostr-DM/NIP-46 Director self-verifies; an out-of-band channel stays <b>pending</b> until they sign a challenge naming that channel. See <a href="/docs/threat-model.md" target="_blank">the threat model</a>.</div>
+      <div class="grid">${S.directors.map(d=>{
+        const ver = d.bootstrap || d.verified;
+        return `<div class="card" style="padding:14px"><div class="row between">
         <div class="row"><span class="avatar">${esc((d.label||'D')[0].toUpperCase())}</span>
           <div><h3 style="font-size:15px">${esc(d.label||'Director')}${d.bootstrap?' <span class="badge b-elev" style="vertical-align:2px">anchor</span>':''}</h3>
           <div class="kv">${esc(d.npub)}</div></div></div>
-        ${d.bootstrap?'<span class="req">bootstrap — cannot be removed</span>':`<button class="btn danger" data-rm-dir="${esc(d.npub)}">Remove</button>`}</div></div>`).join('')}</div>
+        <span class="badge ${ver?'b-ok':'b-elev'}">${ver?'verified':'pending'}</span></div>
+        <div class="hint" style="margin-top:8px">${ver
+          ? (d.bootstrap?'bootstrap anchor — signs via NIP-07 / bunker; cannot be removed'
+                        :'binding: signature (NIP-98 / nostr-DM) — self-verifying')
+          : 'invited — proposals route to the claimed channel, but approvals are <b>not honored</b> until they sign the channel binding'}</div>
+        ${d.bootstrap?'':`<div class="acts"><button class="btn danger" data-rm-dir="${esc(d.npub)}">Remove</button></div>`}</div>`;}).join('')}</div>
       <div class="form" style="margin-top:14px">
-        <label>Add a Director</label>
+        <label>Invite a Director</label>
         <input id="nd-label" placeholder="name or NIP-05 (label only)">
         <input id="nd-npub" placeholder="npub1… — their public key">
-        <button class="btn primary" id="nd-add">Add Director</button>
-        <div class="note">They approve by signing with this key (NIP-07 in the browser, or a NIP-46 bunker). Only the npub is needed — no secret is ever entered here.</div>
+        <button class="btn primary" id="nd-add">Send invite</button>
+        <div class="note">Only the npub is entered — never a secret. A nostr-DM/NIP-46 Director self-verifies on their first signed reply; an out-of-band channel (Telegram, etc.) stays pending until they sign a challenge that names that channel.</div>
       </div></div>`;
+  }
+  if(tab==='deployment'){
+    h=`<div class="card">
+      <h3>Nactor — the runtime</h3>
+      <div class="muted" style="margin:2px 0 10px">The runtime this config targets: the box that applies your agent identities, channels, and routing, holds the queue, and signs the enacted events. It can be this box or a remote one — the app just points at its address, so <b>client and runtime are decoupled</b>.</div>
+      <div class="form" style="max-width:560px;margin-top:0">
+        <label>Nactor address</label><input id="na-addr" placeholder="https://nact.nave.pub/api" value="${esc(S.nactorAddress||'')}">
+        <button class="btn primary" id="na-save">Save address</button>
+        <div class="note">Same box as this app, or another entirely.</div>
+      </div></div>
+      <div class="card" style="margin-top:14px">
+      <h3>Connection</h3>
+      <div class="row between" style="margin-top:6px">
+        <div class="muted">${LIVE?'Connected to Nactor over the NIP-98 gate.':'Not connected — showing sample data. Use <b>Connect</b> (top right) as a Director to reach the live runtime.'}</div>
+        <span class="badge ${LIVE?'b-ok':'b-off'}">${LIVE?'● live':'demo'}</span></div>
+      <div class="label">Runtime address</div>
+      <div class="kv">${esc(S.nactorAddress||'—')}</div>
+      <div class="label">Applying</div>
+      <div class="kv">${S.directors.length} director(s) · ${S.identities.length} agent identit${S.identities.length===1?'y':'ies'} · ${S.channels.length} channel(s)</div>
+      </div>`;
   }
   if(tab==='channels'){
     h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
@@ -416,7 +435,7 @@ function draw(){
     if(!/^npub1[0-9a-z]{20,}$/.test(npub)){alert('Enter a valid npub1… key.');return;}
     const label=(document.getElementById('nd-label').value||'').trim()||npub.slice(0,12)+'…';
     if(S.directors.some(d=>d.npub===npub)){alert('That Director is already added.');return;}
-    S.directors.push({npub,label,bootstrap:false});draw();syncConfig();
+    S.directors.push({npub,label,bootstrap:false,verified:false});draw();syncConfig();
   };
   v.querySelectorAll('[data-rm-dir]').forEach(b=>b.onclick=()=>{
     S.directors=S.directors.filter(d=>d.npub!==b.dataset.rmDir||d.bootstrap);draw();syncConfig();});
