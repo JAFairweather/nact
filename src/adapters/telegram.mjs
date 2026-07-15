@@ -1,9 +1,9 @@
-// Telegram approval adapter for nact.
+// Telegram approval adapter for Nact.
 //
 // Delivers each proposed action to the approver as an Approve/Reject card,
 // and edits the card to show the outcome. Only the configured Telegram user
 // id may enact. NOTE: one Telegram bot serves ONE webhook — use a bot
-// dedicated to nact, not one shared with another integration.
+// dedicated to Nact, not one shared with another integration.
 
 export function telegramApproval({ botToken, approverId, webhookSecret } = {}) {
   if (!botToken || !approverId) throw new Error('nact/telegram: botToken and approverId are required')

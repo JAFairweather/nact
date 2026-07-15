@@ -14,7 +14,7 @@ export function custodialSigner(nsec) {
     kind: 'custodial',
     async publicKey() { return pk },
     // finalizeEvent stamps pubkey/id/sig from sk; a pubkey on the template
-    // is ignored, so this is safe for the shared unsigned shape nact builds.
+    // is ignored, so this is safe for the shared unsigned shape Nact builds.
     async sign(unsigned) { return finalizeEvent(unsigned, sk) },
     async close() {},
   }

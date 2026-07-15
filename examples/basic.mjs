@@ -1,4 +1,4 @@
-// A minimal nact wiring: an HTTP server that (a) lets your proposer submit an
+// A minimal Nact wiring: an HTTP server that (a) lets your proposer submit an
 // action and (b) receives the Telegram approval callback. Run with the env
 // vars from the quickstart set. This is illustrative — your real proposer
 // (LLM + signals) calls nact.propose() however it likes.

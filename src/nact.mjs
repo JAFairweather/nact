@@ -1,4 +1,4 @@
-// nact — the enactment pipeline: propose an action, a human enacts it by
+// Nact — the enactment pipeline: propose an action, a human enacts it by
 // signing, then it broadcasts. The agent proposes; it never holds the key
 // that authorizes. Generalized from the Nave ecosystem's Luke agent.
 //
@@ -7,7 +7,7 @@
 //     (Telegram today; a NIP-59 gift-wrapped nostr DM is the native path).
 //   • the SIGNER decides where the authorizing key lives — custodial (nsec on
 //     this host, your explicit choice) or NIP-46 (a remote bunker; the key
-//     stays on your device and nact never sees it).
+//     stays on your device and Nact never sees it).
 
 import { nip19 } from 'nostr-tools'
 import { SimplePool } from 'nostr-tools/pool'

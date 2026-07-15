@@ -1,6 +1,6 @@
-# Contributing to nact
+# Contributing to Nact
 
-Thanks for looking. nact is small on purpose — a clean pipeline (propose →
+Thanks for looking. Nact is small on purpose — a clean pipeline (propose →
 enact → broadcast) with pluggable **approval adapters** and **signers**. Most
 contributions slot into one of those two seams without touching the core.
 
@@ -32,7 +32,7 @@ your proposer → Nact.propose() → approval adapter → you enact → signer �
 ## Ground rules
 
 - **Never** commit a key, token, or `.env`. Secrets live only in the deployer's
-  environment. The whole point of nact is that keys don't move — the codebase
+  environment. The whole point of Nact is that keys don't move — the codebase
   must model that.
 - Keep the core's trust surface obvious. If a change touches signing or approver
   verification, explain the threat model in the PR.

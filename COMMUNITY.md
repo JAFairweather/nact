@@ -1,26 +1,26 @@
-# nact in the community
+# Nact in the community
 
-nact only matters if the people building agentic tools on nostr actually reach
+Nact only matters if the people building agentic tools on nostr actually reach
 for it. This is the plan to make that happen — concrete steps, not vibes.
 
 ## The one-sentence pitch
 
-> **nact is the action-out half of scoped autonomy: an AI agent can propose any
+> **Nact is the action-out half of scoped autonomy: an AI agent can propose any
 > nostr action, but it only happens when you enact it with a signature — the
 > key never touches the agent.**
 
 Everything below is in service of getting that sentence in front of the right
 people with a working repo behind it.
 
-## Where nact fits (and where it doesn't)
+## Where Nact fits (and where it doesn't)
 
 - It is **not** another NIP-46 signer. It composes with NIP-46: the signer
-  answers "sign this"; nact adds the layer above — an agent that drafts the
+  answers "sign this"; Nact adds the layer above — an agent that drafts the
   event and an asynchronous, messaging-based approval before anything is signed.
 - It is **not** a bot framework. Your proposer (LLM, signals, voice) is yours;
-  nact takes the finished unsigned event and runs the enact pipeline.
+  Nact takes the finished unsigned event and runs the enact pipeline.
 - It **is** the missing safety story for "let an AI post for me" — the reason
-  most people won't point a bot at their real npub. nact's answer: it can't post
+  most people won't point a bot at their real npub. Nact's answer: it can't post
   without your signature, by construction.
 
 ## Alignment with the protocol
@@ -30,19 +30,19 @@ Meeting nostr where it is makes adoption frictionless:
 - **NIP-17 / NIP-59** — the nostr-DM approval adapter delivers proposals as
   gift-wrapped DMs and reads signed replies. No third-party messenger required.
 - **NIP-46** — the sovereign signer path; the key stays in the user's bunker.
-- **NIP-05** — nact will publish a handle (`nact@nave.pub`) so the project has a
-  followable identity for release notes and demos (see "Give nact a face").
+- **NIP-05** — Nact will publish a handle (`nact@nave.pub`) so the project has a
+  followable identity for release notes and demos (see "Give Nact a face").
 - **Future NIP fit** — the proposal→enact flow generalizes cleanly to a small
   spec (an "action request" event kind + an "enact" response). If there's
   appetite, draft it as a NIP so approval UX can be standardized across clients.
 
 ## First moves (in order)
 
-1. **Announce it — through nact itself.** The most on-brand launch: draft the
+1. **Announce it — through Nact itself.** The most on-brand launch: draft the
    announcement with the agent, route it through the Luke/nave posting loop,
    approve the tap, and let it broadcast. The medium *is* the message. Draft in
    `assets/announcement.md`.
-2. **Get it listed.** Open PRs / issues to add nact to:
+2. **Get it listed.** Open PRs / issues to add Nact to:
    - [awesome-nostr](https://github.com/aljazceru/awesome-nostr) — "Libraries"
      or "Tools" section.
    - [nostr.net](https://nostr.net/) resource list.
@@ -56,7 +56,7 @@ Meeting nostr where it is makes adoption frictionless:
    (Telegram "Nostr Developers", the `#nostr` dev relays, the awesome-nostr
    discussions). Lead with the safety inversion, not the code.
 
-## Give nact a face (nact@nave.pub)
+## Give Nact a face (nact@nave.pub)
 
 A project account people can follow for updates. Keys are generated **on the
 box**, never pasted anywhere:
@@ -68,13 +68,13 @@ KEY=$(docker run --rm luke:latest node -e "import('nostr-tools').then(t=>{const 
 ```
 
 Then: add the hex pubkey to `nave.pub/.well-known/nostr.json` under `nact`, add
-`NACT_NSEC` to the SOPS-encrypted secrets, and give nact a profile (kind 0) with
+`NACT_NSEC` to the SOPS-encrypted secrets, and give Nact a profile (kind 0) with
 the seal avatar via the existing `publish-profiles.mjs`. This mirrors exactly
 how `luke@` and `nave@` were set up.
 
 ## Listing copy (ready to paste)
 
-> **[nact](https://nact.nave.pub)** — Give an AI agent the ability to act on
+> **[Nact](https://nact.nave.pub)** — Give an AI agent the ability to act on
 > nostr without giving it your keys: it drafts an action, you enact it with a
 > signature, it broadcasts. Human-in-the-loop by architecture, not policy.
 > Ships Telegram and NIP-59 gift-wrap DM approval adapters and a NIP-46 signer

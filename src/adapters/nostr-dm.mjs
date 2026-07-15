@@ -1,4 +1,4 @@
-// Nostr-DM approval adapter for nact — the native path.
+// Nostr-DM approval adapter for Nact — the native path.
 //
 // Instead of a Telegram bot, the proposal is delivered to the approver as a
 // NIP-59 gift-wrapped, NIP-17 direct message. The approver reads it in any
@@ -7,7 +7,7 @@
 // gift-wrapped DM, so the approval is authenticated by *their* key — no
 // third-party bot, no platform account, entirely inside nostr.
 //
-// nact DMs from a dedicated "channel" key (channelNsec) — a low-value key
+// Nact DMs from a dedicated "channel" key (channelNsec) — a low-value key
 // whose only job is to carry approval traffic. The authority still rests with
 // the approver's signature and, when paired with the NIP-46 signer, their
 // bunker; the channel key can't enact anything.

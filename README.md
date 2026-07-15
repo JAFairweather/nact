@@ -1,4 +1,4 @@
-# nact
+# Nact
 
 **Give an AI agent the ability to act on nostr — it drafts the action, you
 enact it with a signature, your keys never move.**
@@ -24,7 +24,7 @@ It's the action-out half of **scoped autonomy**:
 | | governs | direction |
 |---|---|---|
 | [nvoy](https://github.com/JAFairweather/nvoy) | what the agent may **perceive** (scoped data grants) | in |
-| **nact** | what the agent may **do** (signature-gated actions) | out |
+| **Nact** | what the agent may **do** (signature-gated actions) | out |
 
 An agent that operates inside a data boundary *and* an action boundary.
 
@@ -141,10 +141,10 @@ persisted pending store and multi-approver quorum.
 
 ## Contributing & community
 
-nact is small on purpose — most contributions slot into an **approval adapter**
+Nact is small on purpose — most contributions slot into an **approval adapter**
 or a **signer** without touching the trust-critical core. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the seams and ground rules, and
-[`COMMUNITY.md`](COMMUNITY.md) for where nact is headed in the nostr ecosystem
+[`COMMUNITY.md`](COMMUNITY.md) for where Nact is headed in the nostr ecosystem
 and how to help it get there.
 
 ---

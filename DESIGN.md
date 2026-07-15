@@ -1,4 +1,4 @@
-# nact — design
+# Nact — design
 
 ## The four roles
 
@@ -86,7 +86,7 @@ key — no bot account, no platform, entirely inside nostr.
 ## Relationship to the ecosystem
 
 - **nvoy** governs the agent's *inputs* (scoped, revocable data grants).
-- **nact** governs the agent's *outputs* (signature-gated actions).
+- **Nact** governs the agent's *outputs* (signature-gated actions).
 - Together: **scoped autonomy** — an agent bounded on both what it may perceive
   and what it may do.
 
@@ -113,7 +113,7 @@ an agent flow:
 - It's **scoped** — the grant carries exactly the one credential the flow needs.
 
 A credential is higher-value than ordinary data, so this pairs naturally with
-nact's approval gate (a human *enacts* the granting of a credential) and short
+Nact's approval gate (a human *enacts* the granting of a credential) and short
 TTLs. Net effect: an agent gets **use** of a credential for a bounded flow
 without that credential entering its long-term storage, its logs, or its model
 context.
@@ -138,7 +138,7 @@ scope** — a grant back to the agent:
   provider → [ response = grant(data) ]                  → agent
 ```
 
-This is where **nvoy and nact turn out to be one primitive seen from two
+This is where **nvoy and Nact turn out to be one primitive seen from two
 sides**: a *data request is an action* (nact-shaped — proposed, approved,
 fulfilled), and *fulfilling it produces a grant* (nvoy-shaped — scoped, live,
 revocable). The provider's "approval" is exactly an **enact** — a signature

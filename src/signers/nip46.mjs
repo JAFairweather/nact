@@ -1,13 +1,13 @@
-// NIP-46 remote signer — the sovereign path. nact holds a *connection* to a
+// NIP-46 remote signer — the sovereign path. Nact holds a *connection* to a
 // bunker (nsecbunker, a phone signer like Amber, an nsec.app instance), not a
 // key. Every sign() is a round-trip that the bunker authorizes; the secret
-// never leaves the user's device. Pair this with nact's human approval and
+// never leaves the user's device. Pair this with Nact's human approval and
 // you get two independent gates: the approver taps "enact", and the bunker
 // signs — both must be the sovereign to produce a valid event.
 //
 // Give it a bunker connection string:
 //   bunker://<remote-signer-pubkey>?relay=wss://…&secret=…
-// nact generates an ephemeral client key per process unless you pass one
+// Nact generates an ephemeral client key per process unless you pass one
 // (clientSecret) so a bunker can remember the pairing across restarts.
 import { generateSecretKey } from 'nostr-tools'
 import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
