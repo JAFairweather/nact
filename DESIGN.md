@@ -85,10 +85,44 @@ key — no bot account, no platform, entirely inside nostr.
 
 ## Relationship to the ecosystem
 
-- **nvoy** governs the agent's *inputs* (scoped, revocable data grants).
+- **Nvoy** governs the agent's *inputs* (scoped, revocable data grants).
 - **Nact** governs the agent's *outputs* (signature-gated actions).
 - Together: **scoped autonomy** — an agent bounded on both what it may perceive
   and what it may do.
+
+## Three expressions of one thing
+
+Nact is the enactment **protocol** (propose → approve → sign → broadcast), and it
+shows up in three forms under one name — unlike Nscope→Nvoy, where the app is one
+of many on the protocol. Here the app *is* the protocol made usable, so it keeps
+the Nact name:
+
+- **the pattern** — the four roles and the trust model (this doc).
+- **the library** (`nact` on npm) — the runtime that runs the pipeline; what an
+  agent or app imports.
+- **the app** (nact.nave.pub) — the human **control plane**: construct and
+  manage approval channels, and grant or revoke an agent's authority to act. The
+  mirror of Nvoy on the perceive side.
+
+### What the app manages
+
+An **approval channel is itself a scoped grant** — of *approval authority*, not
+data. So the app is a grant manager, built (like Nvoy) on the same NIP-DA
+primitive:
+
+- **Identities** the agent may act as (custodial or NIP-46).
+- **Channels** — Telegram, NIP-59 nostr-DM, later Signal / Matrix / web-push —
+  bound to identities.
+- **Scoped authority** — which identities, which event kinds, rate limits,
+  per-proposal TTL, m-of-n quorum, time windows.
+- **Queue + history** — what's pending, what was enacted or rejected, an audit
+  trail.
+- **Revoke in one move** — rotate the channel key or the identity's authority and
+  the agent instantly loses the right to propose. Nvoy's *un-see it* becomes
+  *un-authorize it*.
+
+The library is the runtime; the app is the control plane that configures it —
+the same idea seen from two sides, under one name.
 
 ## Two directions the primitive wants to grow
 
