@@ -106,6 +106,11 @@ section{padding:8px 0 40px}
 .matrix thead th small{display:block;font-weight:400;color:var(--faint);text-transform:none;letter-spacing:0}
 .matrix .yes{color:var(--low);font-weight:700}
 .matrix .no{color:var(--faint)}
+.matrix td{padding:8px}
+.cell{cursor:pointer;background:none;border:1px solid var(--line2);border-radius:8px;width:44px;height:36px;font-size:16px;color:var(--faint);transition:all .12s}
+.cell:hover{border-color:var(--accent);color:var(--accent-bright)}
+.cell.on{color:var(--low);border-color:color-mix(in srgb,var(--low) 55%,transparent);background:color-mix(in srgb,var(--low) 13%,transparent)}
+.cell.stale{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 45%,transparent)}
 
 /* policy table */
 table{width:100%;border-collapse:collapse;font-size:14px}
@@ -192,7 +197,7 @@ const chanShort = c=>c.kind.split(' ')[0];   // "Telegram" / "NIP-59"
 
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  const defs=[['queue','Queue',S.queue.length],['identities','Identities'],['channels','Channels'],['policy','Policy'],['history','History']];
+  const defs=[['queue','Queue',S.queue.length],['identities','Identities'],['channels','Channels'],['routing','Routing'],['policy','Policy'],['history','History']];
   for(const [k,label,n] of defs){
     const b=$(`<button class="tab ${k===tab?'on':''}">${label}${n?`<span class="n">${n}</span>`:''}</button>`);
     b.onclick=()=>{tab=k;draw()}; t.appendChild(b);
@@ -241,15 +246,19 @@ function draw(){
         : `<span class="chip warnchip">⚠ no channel — cannot be approved</span>`}</div>
       <div class="acts"><button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}</div>`;
   }
-  if(tab==='channels'){
-    const matrix = `<div class="card"><div class="label" style="margin-top:0">Wiring — which identity is reachable through which channel</div>
-      <table class="matrix" style="margin-top:10px"><thead><tr><th>Identity ╲ Channel</th>
+  if(tab==='routing'){
+    h=`<div class="card"><div class="label" style="margin-top:0">Routing — wire each identity to each channel</div>
+      <div class="muted" style="margin:6px 0 12px">Click a cell to bind or unbind. An identity can only be approved through channels it's wired to — its proposals are routed to every channel it's bound to.</div>
+      <table class="matrix"><thead><tr><th>Identity ╲ Channel</th>
       ${S.channels.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
-      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}</td>${S.channels.map(c=>{
+      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}</td>${S.channels.map(c=>{
         const wired=c.covers.includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
-        return `<td class="${live?'yes':'no'}">${wired?(live?'✓':'✕'):'·'}</td>`;}).join('')}</tr>`).join('')}</tbody></table>
-      <div class="muted" style="margin-top:8px;font-size:12.5px">✓ wired &amp; live · ✕ wired but severed/revoked · · not wired</div></div>`;
-    h=`<div class="grid">${matrix}${S.channels.map(c=>`<div class="card"><div class="row between">
+        const cls=wired?(live?'on':'stale'):'off', mark=wired?(live?'✓':'✕'):'○';
+        return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}</tr>`).join('')}</tbody></table>
+      <div class="muted" style="margin-top:10px;font-size:12.5px">✓ wired &amp; live · ✕ wired but the channel or identity is severed · ○ not wired — click to toggle</div></div>`;
+  }
+  if(tab==='channels'){
+    h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
       <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · approver <b>${esc(c.approver)}</b></div></div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
       <div class="label">Signs for these identities</div>
@@ -279,6 +288,9 @@ function draw(){
   v.querySelectorAll('[data-no]').forEach(b=>b.onclick=()=>decide(b.dataset.no,'rejected'));
   v.querySelectorAll('[data-revoke-id]').forEach(b=>b.onclick=()=>{const i=S.identities.find(x=>x.key===b.dataset.revokeId);i.status='revoked';draw()});
   v.querySelectorAll('[data-revoke-ch]').forEach(b=>b.onclick=()=>{const c=S.channels.find(x=>x.id===b.dataset.revokeCh);c.status='severed';draw()});
+  v.querySelectorAll('[data-wire]').forEach(b=>b.onclick=()=>{const [ik,cid]=b.dataset.wire.split('|');
+    const c=S.channels.find(x=>x.id===cid);const at=c.covers.indexOf(ik);
+    if(at<0)c.covers.push(ik);else c.covers.splice(at,1);draw()});
   v.querySelectorAll('[data-tier]').forEach(b=>b.onclick=()=>{const p=S.policy[+b.dataset.tier];
     p.tier={low:'elevated',elevated:'critical',critical:'low'}[p.tier];draw()});
 }
