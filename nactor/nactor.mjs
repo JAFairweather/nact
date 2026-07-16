@@ -90,6 +90,33 @@ function directorPubs() {
 }
 const isDirector = pub => directorPubs().has(pub)
 
+// Pubkeys of on-box identities the Director has ACTIVATED (signed consent).
+// The activation is what grants an identity the right to *use* brokered
+// credentials — so a box service signing NIP-98 as `luke` can reach the broker,
+// but only because you authorized `luke` by signature.
+function activatedPubs() {
+  const set = new Set()
+  for (const name of Object.keys(config?.activations || {})) {
+    const nsec = IMPORTED.get(name)?.nsec ?? IDS[name]?.nsec
+    try { if (nsec) set.add(getPublicKey(loadSecret(nsec))) } catch {}
+  }
+  return set
+}
+
+// Broker providers. The caller supplies the path/method/body; Nactor pins the
+// HOST and injects the secret from its in-memory credential — so the value
+// never leaves Nactor, and a caller can't point the broker at an arbitrary
+// host (no SSRF / open-proxy). Base URL is overridable per provider for tests
+// or an egress proxy. Add a provider here to broker a new credential.
+const BROKER_PROVIDERS = {
+  anthropic: {
+    credential: 'anthropic',
+    base: () => process.env.NACT_BROKER_BASE_ANTHROPIC || 'https://api.anthropic.com',
+    headers: v => ({ 'x-api-key': v, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }),
+    allow: p => p.startsWith('/v1/'),
+  },
+}
+
 const approval = webQueueApproval({ isDirector })
 const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 
@@ -168,11 +195,39 @@ const server = createServer(async (req, res) => {
   if (!directorPubs().size) return json(res, 503, { error: 'no Director configured' })
   const pubkey = verifyNip98(req.headers['authorization'], req.method, path, bodyRaw)
   if (!pubkey) return json(res, 401, { error: 'nip-98 auth required' })
-  if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
   let body = {}
   if (bodyRaw) { try { body = JSON.parse(bodyRaw) } catch { return json(res, 400, { error: 'bad json' }) } }
 
   try {
+    // Broker — gated by Director OR an ACTIVATED identity (not the Director-only
+    // gate below). Nactor holds the credential in RAM, injects it into the pinned
+    // provider host, and streams the response back. The secret value is never
+    // returned. This is how a consumer USES a RAM-only credential without ever
+    // seeing it. Pilot provider: anthropic (luke-brain's drafting calls).
+    if (path === '/api/broker' && req.method === 'POST') {
+      if (!NACTOR_NPUB) return json(res, 503, { error: 'NACTOR_NSEC not configured — broker disabled' })
+      if (!isDirector(pubkey) && !activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not a Director or an activated identity' })
+      const prov = BROKER_PROVIDERS[String(body.provider || '')]
+      if (!prov) return json(res, 400, { error: `unknown broker provider '${body.provider || ''}'` })
+      const cred = CREDS.get(prov.credential)
+      if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
+      const p = String(body.path || '')
+      if (!prov.allow(p)) return json(res, 400, { error: `path '${p}' not permitted for provider '${body.provider}'` })
+      const method = String(body.method || 'POST').toUpperCase()
+      let upstream
+      try {
+        upstream = await fetch(prov.base().replace(/\/$/, '') + p, {
+          method,
+          headers: prov.headers(cred.value),
+          body: (method === 'GET' || method === 'HEAD') ? undefined : JSON.stringify(body.body ?? {}),
+        })
+      } catch (e) { return json(res, 502, { error: 'broker upstream failed: ' + (e?.message || String(e)) }) }
+      const text = await upstream.text().catch(() => '')
+      res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' })
+      return res.end(text)
+    }
+
+    if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
     if (path === '/api/state' && req.method === 'GET') {
       return json(res, 200, {
         director: nip19.npubEncode(pubkey),               // the Director making this request
