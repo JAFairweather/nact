@@ -71,6 +71,19 @@ const NACTOR_NPUB = NACTOR_PUB ? nip19.npubEncode(NACTOR_PUB) : null
 const CREDS = new Map()
 const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the identities view)
 
+// Bootstrap provider credentials from env → CREDS at boot. This is the credential
+// analog of the role-key env loop above: SOPS delivers the secret to NACTOR's
+// env, Nactor loads it into memory, and the CONSUMER (e.g. luke-brain) never has
+// it — it reaches the provider only by brokering through Nactor. Durable across
+// restarts (re-read each boot), no Director key needed on the box, and no value
+// is written back to disk or returned by the API. Add a provider by mapping its
+// broker name to the env var it arrives in.
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY' }
+for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
+  const v = (process.env[envk] || '').trim()
+  if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
+}
+
 // Decrypt a credential-scope: NIP-44 ciphertext from the Director (its pubkey,
 // known from the NIP-98 signature) to Nactor's key. Returns plaintext or throws.
 function decryptScope(enc, directorPub) {
