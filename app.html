@@ -272,15 +272,18 @@ function connectViaNostrConnect(){
         <div class="label" style="margin-top:0">nostrconnect link</div>
         <textarea id="nc-uri" readonly rows="3" style="width:100%;margin:6px 0;background:#0d0a06;border:1px solid var(--line2);border-radius:8px;padding:10px 12px;color:var(--accent-bright);font-family:var(--mono);font-size:11px;resize:none">generating…</textarea>
         <div class="row" style="gap:10px"><button class="btn primary" id="nc-copy">Copy link</button><span class="hint" id="nc-status">waiting for nsec.app to connect…</span></div>
+        <div class="label" style="margin-top:12px">diagnostics</div>
+        <pre id="nc-log" style="margin:4px 0 0;background:#0d0a06;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--dim);font-size:10.5px;max-height:150px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
         <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" id="nc-cancel">Cancel</button></div>
       </div></div>`);
     document.body.appendChild(ov);
     let settled=false; const finish=(fn,v)=>{if(settled)return;settled=true;clearTimeout(t);ov.remove();fn(v)};
     const t=setTimeout(()=>finish(reject,new Error('No connection after 3 min. In nsec.app, tap Connect app and paste the link. If you use a VPN/filter it may block the signer relay.')),185000);
     ov.querySelector('#nc-cancel').onclick=()=>finish(reject,new Error('cancelled'));
-    const ta=ov.querySelector('#nc-uri');
+    const ta=ov.querySelector('#nc-uri'), logEl=ov.querySelector('#nc-log');
+    const log=m=>{ const t=new Date().toLocaleTimeString(); logEl.textContent+=`${t}  ${m}\n`; logEl.scrollTop=logEl.scrollHeight; try{console.log('[nact-nc]',m)}catch{} };
     ov.querySelector('#nc-copy').onclick=()=>{ta.select();try{navigator.clipboard.writeText(ta.value)}catch{};document.execCommand&&document.execCommand('copy');ov.querySelector('#nc-status').textContent='copied — paste it in nsec.app';};
-    window.__nact.connectNostrConnect((uri)=>{ ta.value=uri; })
+    window.__nact.connectNostrConnect((uri)=>{ ta.value=uri; }, log)
       .then(conn=>finish(resolve,conn)).catch(e=>finish(reject,e));
   });
 }
@@ -570,7 +573,7 @@ draw();
 import { BunkerSigner, parseBunkerInput, createNostrConnectURI, SimplePool, generateSecretKey, getPublicKey, nip19, nip44, nip04 } from './assets/vendor/nostr-tools-bunker.mjs';
 const hex = u8 => [...u8].map(b=>b.toString(16).padStart(2,'0')).join('');
 const unhex = s => Uint8Array.from(s.match(/.{1,2}/g).map(b=>parseInt(b,16)));
-const NC_RELAYS = ['wss://relay.nsec.app','wss://relay.damus.io'];
+const NC_RELAYS = ['wss://relay.nsec.app','wss://relay.damus.io','wss://nos.lol','wss://relay.primal.net'];
 function clientKey(){ let saved=localStorage.getItem('nact.bunker.clientkey'); const sk=saved?unhex(saved):generateSecretKey(); if(!saved) localStorage.setItem('nact.bunker.clientkey',hex(sk)); return sk; }
 window.__nact = window.__nact || {};
 // nostrconnect:// — Nact generates the link, YOU paste it into nsec.app "Connect
@@ -578,30 +581,41 @@ window.__nact = window.__nact || {};
 // only accepts result===secret + NIP-44 and hangs when a signer (e.g. nsec.app)
 // replies result:"ack" or NIP-04. We accept either, learn the signer's pubkey
 // from the ack, then build the signer with fromBunker (no re-connect needed).
-window.__nact.connectNostrConnect = async function(onUri){
+// `log` streams diagnostics to the UI so we can see exactly where it breaks.
+window.__nact.connectNostrConnect = async function(onUri, log){
+  log = log || (()=>{});
   const sk = clientKey();
   const clientPub = getPublicKey(sk);
   const secret = hex(generateSecretKey());
   const uri = createNostrConnectURI({ clientPubkey: clientPub, relays: NC_RELAYS, secret, perms:['sign_event:27235','get_public_key'], name:'Nact', url: location.origin });
   try{ onUri && onUri(uri); }catch{}
+  log('client pubkey '+clientPub.slice(0,10)+'…  secret '+secret.slice(0,6)+'…');
   const pool = new SimplePool();
-  const since = Math.floor(Date.now()/1000) - 20;
+  // Probe each relay so we can see which actually open (a blocked/unreachable
+  // signer relay is the usual culprit).
+  NC_RELAYS.forEach(async r=>{ try{ await pool.ensureRelay(r); log('relay OK  '+r); }catch(e){ log('relay FAIL '+r+' — '+(e&&e.message||e)); } });
+  const since = Math.floor(Date.now()/1000) - 30;
+  let count=0;
   const signerPubkey = await new Promise((resolve,reject)=>{
+    log('subscribing for the ack (kind 24133 → us)…');
     const sub = pool.subscribe(NC_RELAYS, { kinds:[24133], '#p':[clientPub], since }, {
       onevent: async (ev)=>{
-        let plain=null;
-        try{ plain = nip44.decrypt(ev.content, nip44.getConversationKey(sk, ev.pubkey)); }
-        catch{ try{ plain = await nip04.decrypt(sk, ev.pubkey, ev.content); }catch{ return; } }
-        let resp; try{ resp = JSON.parse(plain); }catch{ return; }
-        // The connect ack: result is the echoed secret or "ack".
-        if(resp && (resp.result===secret || resp.result==='ack' || (resp.result && !resp.error))){ try{sub.close()}catch{}; resolve(ev.pubkey); }
+        count++;
+        let plain=null, enc='none';
+        try{ plain = nip44.decrypt(ev.content, nip44.getConversationKey(sk, ev.pubkey)); enc='nip44'; }
+        catch{ try{ plain = await nip04.decrypt(sk, ev.pubkey, ev.content); enc='nip04'; }catch{ log('event #'+count+' from '+ev.pubkey.slice(0,8)+'… — decrypt FAILED (both)'); return; } }
+        let resp; try{ resp = JSON.parse(plain); }catch{ log('event #'+count+' '+enc+' — not JSON'); return; }
+        log('event #'+count+' '+enc+' result='+JSON.stringify(resp.result)+(resp.error?' error='+resp.error:''));
+        if(resp && (resp.result===secret || resp.result==='ack' || (resp.result && !resp.error))){ try{sub.close()}catch{}; log('handshake OK — signer '+ev.pubkey.slice(0,10)+'…'); resolve(ev.pubkey); }
       },
     });
-    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer')); }, 175000);
+    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer ('+count+' events seen). If 0 events: the signer relay is unreachable (VPN/filter?) or nsec.app didn\'t publish where we listen.')); }, 175000);
   });
+  log('building signer, asking get_public_key…');
   const bp = { pubkey: signerPubkey, relays: NC_RELAYS, secret };
   const signer = BunkerSigner.fromBunker(sk, bp, { pool });
   const pk = await Promise.race([ signer.getPublicKey(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('signer connected but did not answer get_public_key')),20000)) ]);
+  log('got pubkey '+pk.slice(0,10)+'… — connected.');
   return { pubkey: pk, npub: nip19.npubEncode(pk), signEvent:(e)=>signer.signEvent(e), close:()=>signer.close() };
 };
 window.__nact.connectBunker = async function(bunkerStr, onauth){
