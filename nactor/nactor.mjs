@@ -78,7 +78,7 @@ const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the 
 // restarts (re-read each boot), no Director key needed on the box, and no value
 // is written back to disk or returned by the API. Add a provider by mapping its
 // broker name to the env var it arrives in.
-const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY' }
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN' }
 for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
@@ -121,12 +121,29 @@ function activatedPubs() {
 // never leaves Nactor, and a caller can't point the broker at an arbitrary
 // host (no SSRF / open-proxy). Base URL is overridable per provider for tests
 // or an egress proxy. Add a provider here to broker a new credential.
+// Each provider's build(body, cred) validates the caller's request, injects the
+// secret in the provider's own way, and returns { url, headers } with the host
+// pinned. Anthropic puts the key in a header; Telegram puts the bot token in the
+// URL path (/bot<token>/<method>). The caller never sees the secret and can't
+// repoint the host. Base URL overridable per provider for tests/egress-proxy.
 const BROKER_PROVIDERS = {
   anthropic: {
     credential: 'anthropic',
-    base: () => process.env.NACT_BROKER_BASE_ANTHROPIC || 'https://api.anthropic.com',
-    headers: v => ({ 'x-api-key': v, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }),
-    allow: p => p.startsWith('/v1/'),
+    build: (body, cred) => {
+      const p = String(body.path || '')
+      if (!p.startsWith('/v1/')) throw new Error(`path '${p}' not permitted for anthropic`)
+      const base = (process.env.NACT_BROKER_BASE_ANTHROPIC || 'https://api.anthropic.com').replace(/\/$/, '')
+      return { url: base + p, headers: { 'x-api-key': cred, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
+    },
+  },
+  telegram: {
+    credential: 'telegram',
+    build: (body, cred) => {
+      const m = String(body.tgMethod || '')
+      if (!/^[a-zA-Z]+$/.test(m)) throw new Error(`telegram method '${m}' not permitted`)
+      const base = (process.env.NACT_BROKER_BASE_TELEGRAM || 'https://api.telegram.org').replace(/\/$/, '')
+      return { url: `${base}/bot${cred}/${m}`, headers: { 'content-type': 'application/json' } }
+    },
   },
 }
 
@@ -224,14 +241,14 @@ const server = createServer(async (req, res) => {
       if (!prov) return json(res, 400, { error: `unknown broker provider '${body.provider || ''}'` })
       const cred = CREDS.get(prov.credential)
       if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
-      const p = String(body.path || '')
-      if (!prov.allow(p)) return json(res, 400, { error: `path '${p}' not permitted for provider '${body.provider}'` })
+      let target
+      try { target = prov.build(body, cred.value) } catch (e) { return json(res, 400, { error: e?.message || 'bad broker request' }) }
       const method = String(body.method || 'POST').toUpperCase()
       let upstream
       try {
-        upstream = await fetch(prov.base().replace(/\/$/, '') + p, {
+        upstream = await fetch(target.url, {
           method,
-          headers: prov.headers(cred.value),
+          headers: target.headers,
           body: (method === 'GET' || method === 'HEAD') ? undefined : JSON.stringify(body.body ?? {}),
         })
       } catch (e) { return json(res, 502, { error: 'broker upstream failed: ' + (e?.message || String(e)) }) }
