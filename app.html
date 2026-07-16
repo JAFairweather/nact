@@ -237,23 +237,51 @@ function chooseSigner(){
     const hasExt = !!window.nostr;
     const saved = localStorage.getItem('nact.bunker.uri') || '';
     const ov=$(`<div style="position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.72);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)">
-      <div class="card" style="width:min(460px,94vw);max-height:90vh;overflow:auto">
+      <div class="card" style="width:min(470px,94vw);max-height:90vh;overflow:auto">
         <h3 style="margin-bottom:2px">Connect as a Director</h3>
         <div class="muted" style="margin-bottom:14px">Sign in with your key — it never leaves your signer.</div>
-        ${hasExt?`<button class="btn primary" id="cs-ext" style="width:100%;margin-bottom:16px">Use browser extension (NIP-07)</button><div class="label" style="margin-top:0">or a remote signer</div>`:`<div class="label" style="margin-top:0">Remote signer (NIP-46)</div>`}
-        <div class="hint" style="margin:5px 0 9px">On iPhone/iPad use a remote signer like <b>nsec.app</b> — it gives you a <span class="mono">bunker://</span> string. Paste it below; each request prompts you there.</div>
-        <input id="cs-bunker" placeholder="bunker://…" value="${esc(saved)}" style="width:100%;background:#0d0a06;border:1px solid var(--line2);border-radius:8px;padding:11px 12px;color:var(--text);font-family:var(--mono);font-size:12px">
-        <div class="row" style="gap:10px;justify-content:flex-end;margin-top:14px">
-          <button class="btn ghost" id="cs-cancel">Cancel</button>
-          <button class="btn primary" id="cs-bunker-go">Connect remote signer</button>
-        </div>
+        ${hasExt?`<button class="btn primary" id="cs-ext" style="width:100%;margin-bottom:8px">Use browser extension (NIP-07)</button>`:''}
+        <button class="btn ${hasExt?'':'primary'}" id="cs-nc" style="width:100%;margin-bottom:14px">Connect a remote signer (nsec.app)</button>
+        <div class="hint" style="margin-bottom:8px">Remote signer = your key stays in an app like <b>nsec.app</b>. Nact makes a link; you paste it into nsec.app → <b>Connect app</b>.</div>
+        <details style="margin-top:4px"><summary class="label" style="cursor:pointer;list-style:revert">advanced — paste a bunker:// instead</summary>
+          <input id="cs-bunker" placeholder="bunker://…" value="${esc(saved)}" style="width:100%;margin-top:8px;background:#0d0a06;border:1px solid var(--line2);border-radius:8px;padding:11px 12px;color:var(--text);font-family:var(--mono);font-size:12px">
+          <button class="btn" id="cs-bunker-go" style="margin-top:8px">Connect via bunker://</button>
+        </details>
+        <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" id="cs-cancel">Cancel</button></div>
       </div></div>`);
     document.body.appendChild(ov);
     const done=v=>{ov.remove();resolve(v)};
     ov.querySelector('#cs-ext')?.addEventListener('click',()=>done({kind:'nip07'}));
+    ov.querySelector('#cs-nc').addEventListener('click',()=>done({kind:'nostrconnect'}));
     ov.querySelector('#cs-bunker-go').addEventListener('click',()=>{const s=ov.querySelector('#cs-bunker').value.trim(); if(!s.startsWith('bunker://')){alert('Paste a bunker:// connection string from your signer.');return;} done({kind:'bunker',str:s})});
     ov.querySelector('#cs-cancel').addEventListener('click',()=>done(null));
     ov.addEventListener('click',e=>{if(e.target===ov)done(null)});
+  });
+}
+// nostrconnect flow: show the generated link + steps, wait for the signer to
+// connect back. Matches nsec.app's "Connect app" (you paste INTO nsec.app).
+function connectViaNostrConnect(){
+  return new Promise((resolve,reject)=>{
+    const ov=$(`<div style="position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.82)">
+      <div class="card" style="width:min(500px,94vw);max-height:92vh;overflow:auto">
+        <h3 style="margin-bottom:6px">Connect your signer</h3>
+        <ol class="muted" style="margin:0 0 10px 18px;padding:0;font-size:13.5px;line-height:1.7">
+          <li>In <b>nsec.app</b> tap <b>Connect app</b>.</li>
+          <li>Paste the link below and confirm.</li>
+        </ol>
+        <div class="label" style="margin-top:0">nostrconnect link</div>
+        <textarea id="nc-uri" readonly rows="3" style="width:100%;margin:6px 0;background:#0d0a06;border:1px solid var(--line2);border-radius:8px;padding:10px 12px;color:var(--accent-bright);font-family:var(--mono);font-size:11px;resize:none">generating…</textarea>
+        <div class="row" style="gap:10px"><button class="btn primary" id="nc-copy">Copy link</button><span class="hint" id="nc-status">waiting for nsec.app to connect…</span></div>
+        <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn ghost" id="nc-cancel">Cancel</button></div>
+      </div></div>`);
+    document.body.appendChild(ov);
+    let settled=false; const finish=(fn,v)=>{if(settled)return;settled=true;clearTimeout(t);ov.remove();fn(v)};
+    const t=setTimeout(()=>finish(reject,new Error('No connection after 3 min. In nsec.app, tap Connect app and paste the link. If you use a VPN/filter it may block the signer relay.')),185000);
+    ov.querySelector('#nc-cancel').onclick=()=>finish(reject,new Error('cancelled'));
+    const ta=ov.querySelector('#nc-uri');
+    ov.querySelector('#nc-copy').onclick=()=>{ta.select();try{navigator.clipboard.writeText(ta.value)}catch{};document.execCommand&&document.execCommand('copy');ov.querySelector('#nc-status').textContent='copied — paste it in nsec.app';};
+    window.__nact.connectNostrConnect((uri)=>{ ta.value=uri; })
+      .then(conn=>finish(resolve,conn)).catch(e=>finish(reject,e));
   });
 }
 // Drive a NIP-46 connect with a visible status: surface the signer's approval
@@ -289,6 +317,10 @@ async function goLive(){
     if(choice.kind==='nip07'){
       if(!window.nostr) throw new Error('No browser extension (window.nostr) found.');
       SIGNER = { signEvent:(e)=>window.nostr.signEvent(e) };
+    } else if(choice.kind==='nostrconnect'){
+      if(!window.__nact||!window.__nact.connectNostrConnect) throw new Error('remote-signer client is still loading — reload and try again');
+      btn.textContent='waiting for signer…';
+      SIGNER = await connectViaNostrConnect();        // shows the link + waits for nsec.app
     } else {
       if(!window.__nact||!window.__nact.connectBunker) throw new Error('remote-signer client is still loading — reload and try again');
       btn.textContent='approve in signer…';
@@ -535,10 +567,25 @@ draw();
      no browser extension. Loaded as a module so the inline app can call it via
      window.__nact.connectBunker at Connect time. The key stays in the signer. -->
 <script type="module">
-import { BunkerSigner, parseBunkerInput, SimplePool, generateSecretKey, nip19 } from './assets/vendor/nostr-tools-bunker.mjs';
+import { BunkerSigner, parseBunkerInput, createNostrConnectURI, SimplePool, generateSecretKey, getPublicKey, nip19 } from './assets/vendor/nostr-tools-bunker.mjs';
 const hex = u8 => [...u8].map(b=>b.toString(16).padStart(2,'0')).join('');
 const unhex = s => Uint8Array.from(s.match(/.{1,2}/g).map(b=>parseInt(b,16)));
+const NC_RELAYS = ['wss://relay.nsec.app','wss://relay.damus.io'];
+function clientKey(){ let saved=localStorage.getItem('nact.bunker.clientkey'); const sk=saved?unhex(saved):generateSecretKey(); if(!saved) localStorage.setItem('nact.bunker.clientkey',hex(sk)); return sk; }
 window.__nact = window.__nact || {};
+// nostrconnect:// — Nact generates the link, YOU paste it into nsec.app "Connect
+// app". onUri(uri) hands the string to the UI to display; resolves once the
+// signer connects back (fromURI waits). This is nsec.app's native direction.
+window.__nact.connectNostrConnect = async function(onUri){
+  const sk = clientKey();
+  const secret = hex(generateSecretKey());
+  const uri = createNostrConnectURI({ clientPubkey: getPublicKey(sk), relays: NC_RELAYS, secret, perms:['sign_event:27235','get_public_key'], name:'Nact', url: location.origin });
+  try{ onUri && onUri(uri); }catch{}
+  const pool = new SimplePool();
+  const signer = await BunkerSigner.fromURI(sk, uri, { pool }, 180000);   // waits up to 3 min for the signer
+  const pk = await signer.getPublicKey();
+  return { pubkey: pk, npub: nip19.npubEncode(pk), signEvent:(e)=>signer.signEvent(e), close:()=>signer.close() };
+};
 window.__nact.connectBunker = async function(bunkerStr, onauth){
   const bp = await parseBunkerInput((bunkerStr||'').trim());
   if(!bp) throw new Error('not a valid bunker:// string');
