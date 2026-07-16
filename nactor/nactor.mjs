@@ -23,6 +23,8 @@
 // cockpit already uses). The config-as-grant-over-Nvoy model in
 // docs/architecture.md is the path we migrate to; the endpoints stay the same.
 import { createServer } from 'node:http'
+import { Readable } from 'node:stream'
+import { timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { getPublicKey, nip19, nip44 } from 'nostr-tools'
@@ -78,7 +80,7 @@ const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the 
 // restarts (re-read each boot), no Director key needed on the box, and no value
 // is written back to disk or returned by the API. Add a provider by mapping its
 // broker name to the env var it arrives in.
-const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN' }
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', google: 'GEMINI_API_KEY' }
 for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
@@ -145,6 +147,44 @@ const BROKER_PROVIDERS = {
       return { url: `${base}/bot${cred}/${m}`, headers: { 'content-type': 'application/json' } }
     },
   },
+}
+
+// Egress proxy (transparent). Unlike the RPC broker above — NIP-98-gated, for
+// OUR code — this serves THIRD-PARTY engines that speak a provider's native
+// protocol and can't sign: e.g. OpenClaw's own model calls to Anthropic/Gemini.
+// The engine points its provider base URL at /api/proxy/<provider>/… with a DUMMY
+// key equal to NACT_PROXY_TOKEN; Nactor verifies that token, strips it, injects
+// the REAL credential from RAM, and streams the provider's response back. The
+// real key never leaves Nactor and is never returned — the env var becomes a
+// scoped, revocable *grant of egress* rather than a secret the engine holds.
+//
+// SECURITY — INTERNAL ONLY. This route hands out credentialed egress, so it must
+// never be reachable from the internet. Two hard guarantees plus one soft:
+//   1. Nactor is `expose`-only (never published) — no public port.
+//   2. The public Caddy vhost (nact.nave.pub) MUST refuse /api/proxy/* — the
+//      only public path to Nactor is through Caddy, and it slams this door.
+//   3. NACT_PROXY_TOKEN — defense-in-depth against a compromised in-network peer.
+// Callers reach it directly over the nave network: http://nactor:8791/api/proxy/…
+// If NACT_PROXY_TOKEN is unset, the proxy is disabled.
+const PROXY_TOKEN = (process.env.NACT_PROXY_TOKEN || '').trim()
+const PROXY_PROVIDERS = {
+  anthropic: {
+    credential: 'anthropic',
+    base: (process.env.NACT_PROXY_BASE_ANTHROPIC || 'https://api.anthropic.com').replace(/\/$/, ''),
+    callerToken: (req) => req.headers['x-api-key'],
+    inject: (h, cred) => { h['x-api-key'] = cred; if (!h['anthropic-version']) h['anthropic-version'] = '2023-06-01' },
+  },
+  google: {
+    credential: 'google',
+    base: (process.env.NACT_PROXY_BASE_GOOGLE || 'https://generativelanguage.googleapis.com').replace(/\/$/, ''),
+    callerToken: (req, u) => req.headers['x-goog-api-key'] || u.searchParams.get('key'),
+    inject: (h, cred, u) => { h['x-goog-api-key'] = cred; u.searchParams.delete('key') },
+  },
+}
+// Constant-time compare that also rejects empty/length-mismatch without leaking.
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a ?? '')), y = Buffer.from(String(b ?? ''))
+  return x.length > 0 && x.length === y.length && timingSafeEqual(x, y)
 }
 
 const approval = webQueueApproval({ isDirector })
@@ -218,6 +258,52 @@ const server = createServer(async (req, res) => {
       nactorNpub: NACTOR_NPUB,                     // the grantee address (public)
       credentials: CREDS.size,
     })
+  }
+
+  // --- Egress proxy (internal-only, token-gated) — see PROXY_PROVIDERS -------
+  // BEFORE the NIP-98 gate: the callers are engines that can't sign. Auth is the
+  // shared NACT_PROXY_TOKEN (presented as the provider's dummy key) plus the hard
+  // guarantee that this path is unreachable from the internet (Caddy refuses
+  // /api/proxy/*, Nactor isn't published). Nactor pins the host and injects the
+  // real key, so a caller can't repoint egress or read the secret.
+  if (path.startsWith('/api/proxy/')) {
+    const seg = path.slice('/api/proxy/'.length)
+    const slash = seg.indexOf('/')
+    const provName = slash === -1 ? seg : seg.slice(0, slash)
+    const rest = slash === -1 ? '' : seg.slice(slash)          // leading '/…'
+    const prov = PROXY_PROVIDERS[provName]
+    if (!prov) return json(res, 404, { error: `unknown proxy provider '${provName}'` })
+    if (!PROXY_TOKEN) return json(res, 503, { error: 'egress proxy disabled (NACT_PROXY_TOKEN unset)' })
+    const qs = req.url.includes('?') ? '?' + req.url.split('?').slice(1).join('?') : ''
+    let url
+    try { url = new URL(prov.base + rest + qs) } catch { return json(res, 400, { error: 'bad proxy path' }) }
+    if (!safeEqual(prov.callerToken(req, url), PROXY_TOKEN)) return json(res, 403, { error: 'egress proxy: bad or missing token' })
+    const cred = CREDS.get(prov.credential)
+    if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
+    // Forward the caller's headers minus hop-by-hop, host, and its dummy token.
+    const fwd = {}
+    for (const [k, v] of Object.entries(req.headers)) {
+      const lk = k.toLowerCase()
+      if (['host', 'connection', 'content-length', 'x-api-key', 'x-goog-api-key', 'authorization', 'accept-encoding'].includes(lk)) continue
+      fwd[lk] = Array.isArray(v) ? v.join(', ') : v
+    }
+    prov.inject(fwd, cred.value, url)   // real key in; drops any ?key
+    let reqBody
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      const chunks = []; for await (const c of req) chunks.push(c); reqBody = Buffer.concat(chunks)
+    }
+    let upstream
+    try {
+      upstream = await fetch(url.toString(), { method: req.method, headers: fwd, body: reqBody })
+    } catch (e) { return json(res, 502, { error: 'egress proxy upstream failed: ' + (e?.message || String(e)) }) }
+    const outHeaders = {}
+    for (const [k, v] of upstream.headers.entries()) {
+      if (['content-encoding', 'content-length', 'transfer-encoding', 'connection'].includes(k.toLowerCase())) continue
+      outHeaders[k] = v
+    }
+    res.writeHead(upstream.status, outHeaders)
+    if (upstream.body) return void Readable.fromWeb(upstream.body).pipe(res)
+    return void res.end()
   }
 
   // Everything else requires NIP-98 from a configured Director.
