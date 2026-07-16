@@ -240,9 +240,12 @@ function chooseSigner(){
       <div class="card" style="width:min(470px,94vw);max-height:90vh;overflow:auto">
         <h3 style="margin-bottom:2px">Connect as a Director</h3>
         <div class="muted" style="margin-bottom:14px">Sign in with your key — it never leaves your signer.</div>
-        ${hasExt?`<button class="btn primary" id="cs-ext" style="width:100%;margin-bottom:8px">Use browser extension (NIP-07)</button>`:''}
-        <button class="btn ${hasExt?'':'primary'}" id="cs-nc" style="width:100%;margin-bottom:14px">Connect a remote signer (nsec.app)</button>
-        <div class="hint" style="margin-bottom:8px">Remote signer = your key stays in an app like <b>nsec.app</b>. Nact makes a link; you paste it into nsec.app → <b>Connect app</b>.</div>
+        ${hasExt
+          ? `<button class="btn primary" id="cs-ext" style="width:100%;margin-bottom:6px">Use browser extension (NIP-07)</button>
+             <div class="hint" style="margin-bottom:14px">Recommended — Alby, nos2x, or any NIP-07 extension. Fast and reliable.</div>`
+          : `<div class="hint" style="margin-bottom:14px;border:1px solid var(--line2);border-radius:8px;padding:10px 12px">No NIP-07 extension detected. Install <b>Alby</b> (getalby.com) or <b>nos2x</b>, then reload this page — it's the recommended way to connect.</div>`}
+        <button class="btn" id="cs-nc" style="width:100%;margin-bottom:6px">Connect a remote signer (nsec.app)</button>
+        <div class="hint" style="margin-bottom:8px">Your key stays in an app like <b>nsec.app</b>; Nact makes a link you paste into it → <b>Connect app</b>. Note: this needs the signer's own relay (relay.nsec.app) reachable from your browser — if it's blocked or down, use an extension above.</div>
         <details style="margin-top:4px"><summary class="label" style="cursor:pointer;list-style:revert">advanced — paste a bunker:// instead</summary>
           <input id="cs-bunker" placeholder="bunker://…" value="${esc(saved)}" style="width:100%;margin-top:8px;background:#0d0a06;border:1px solid var(--line2);border-radius:8px;padding:11px 12px;color:var(--text);font-family:var(--mono);font-size:12px">
           <button class="btn" id="cs-bunker-go" style="margin-top:8px">Connect via bunker://</button>
@@ -318,7 +321,9 @@ async function goLive(){
   const btn=document.getElementById('connect');
   try{
     if(choice.kind==='nip07'){
-      if(!window.nostr) throw new Error('No browser extension (window.nostr) found.');
+      if(!window.nostr) throw new Error('No browser extension (window.nostr) found. Install Alby or nos2x and reload.');
+      btn.textContent='approve in extension…';
+      await window.nostr.getPublicKey();   // triggers the extension's permission prompt now, not on first sign
       SIGNER = { signEvent:(e)=>window.nostr.signEvent(e) };
     } else if(choice.kind==='nostrconnect'){
       if(!window.__nact||!window.__nact.connectNostrConnect) throw new Error('remote-signer client is still loading — reload and try again');
