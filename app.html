@@ -567,23 +567,41 @@ draw();
      no browser extension. Loaded as a module so the inline app can call it via
      window.__nact.connectBunker at Connect time. The key stays in the signer. -->
 <script type="module">
-import { BunkerSigner, parseBunkerInput, createNostrConnectURI, SimplePool, generateSecretKey, getPublicKey, nip19 } from './assets/vendor/nostr-tools-bunker.mjs';
+import { BunkerSigner, parseBunkerInput, createNostrConnectURI, SimplePool, generateSecretKey, getPublicKey, nip19, nip44, nip04 } from './assets/vendor/nostr-tools-bunker.mjs';
 const hex = u8 => [...u8].map(b=>b.toString(16).padStart(2,'0')).join('');
 const unhex = s => Uint8Array.from(s.match(/.{1,2}/g).map(b=>parseInt(b,16)));
 const NC_RELAYS = ['wss://relay.nsec.app','wss://relay.damus.io'];
 function clientKey(){ let saved=localStorage.getItem('nact.bunker.clientkey'); const sk=saved?unhex(saved):generateSecretKey(); if(!saved) localStorage.setItem('nact.bunker.clientkey',hex(sk)); return sk; }
 window.__nact = window.__nact || {};
 // nostrconnect:// — Nact generates the link, YOU paste it into nsec.app "Connect
-// app". onUri(uri) hands the string to the UI to display; resolves once the
-// signer connects back (fromURI waits). This is nsec.app's native direction.
+// app". We run our OWN lenient handshake instead of BunkerSigner.fromURI, which
+// only accepts result===secret + NIP-44 and hangs when a signer (e.g. nsec.app)
+// replies result:"ack" or NIP-04. We accept either, learn the signer's pubkey
+// from the ack, then build the signer with fromBunker (no re-connect needed).
 window.__nact.connectNostrConnect = async function(onUri){
   const sk = clientKey();
+  const clientPub = getPublicKey(sk);
   const secret = hex(generateSecretKey());
-  const uri = createNostrConnectURI({ clientPubkey: getPublicKey(sk), relays: NC_RELAYS, secret, perms:['sign_event:27235','get_public_key'], name:'Nact', url: location.origin });
+  const uri = createNostrConnectURI({ clientPubkey: clientPub, relays: NC_RELAYS, secret, perms:['sign_event:27235','get_public_key'], name:'Nact', url: location.origin });
   try{ onUri && onUri(uri); }catch{}
   const pool = new SimplePool();
-  const signer = await BunkerSigner.fromURI(sk, uri, { pool }, 180000);   // waits up to 3 min for the signer
-  const pk = await signer.getPublicKey();
+  const since = Math.floor(Date.now()/1000) - 20;
+  const signerPubkey = await new Promise((resolve,reject)=>{
+    const sub = pool.subscribe(NC_RELAYS, { kinds:[24133], '#p':[clientPub], since }, {
+      onevent: async (ev)=>{
+        let plain=null;
+        try{ plain = nip44.decrypt(ev.content, nip44.getConversationKey(sk, ev.pubkey)); }
+        catch{ try{ plain = await nip04.decrypt(sk, ev.pubkey, ev.content); }catch{ return; } }
+        let resp; try{ resp = JSON.parse(plain); }catch{ return; }
+        // The connect ack: result is the echoed secret or "ack".
+        if(resp && (resp.result===secret || resp.result==='ack' || (resp.result && !resp.error))){ try{sub.close()}catch{}; resolve(ev.pubkey); }
+      },
+    });
+    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer')); }, 175000);
+  });
+  const bp = { pubkey: signerPubkey, relays: NC_RELAYS, secret };
+  const signer = BunkerSigner.fromBunker(sk, bp, { pool });
+  const pk = await Promise.race([ signer.getPublicKey(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('signer connected but did not answer get_public_key')),20000)) ]);
   return { pubkey: pk, npub: nip19.npubEncode(pk), signEvent:(e)=>signer.signEvent(e), close:()=>signer.close() };
 };
 window.__nact.connectBunker = async function(bunkerStr, onauth){
