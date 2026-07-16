@@ -591,14 +591,16 @@ window.__nact.connectNostrConnect = async function(onUri, log){
   try{ onUri && onUri(uri); }catch{}
   log('client pubkey '+clientPub.slice(0,10)+'…  secret '+secret.slice(0,6)+'…');
   const pool = new SimplePool();
-  // Probe each relay so we can see which actually open (a blocked/unreachable
-  // signer relay is the usual culprit).
-  NC_RELAYS.forEach(async r=>{ try{ await pool.ensureRelay(r); log('relay OK  '+r); }catch(e){ log('relay FAIL '+r+' — '+(e&&e.message||e)); } });
-  const since = Math.floor(Date.now()/1000) - 30;
   let count=0;
   const signerPubkey = await new Promise((resolve,reject)=>{
+    // Subscribe EXACTLY like nostr-tools' proven BunkerSigner.fromURI:
+    // { kinds:[24133], '#p':[clientPub], limit:0 }. NO `since` — an earlier
+    // version filtered `since: now-30`, but the ack's created_at is stamped by
+    // the SIGNER's clock; if this browser's clock ran even a little fast the
+    // relay dropped the ack server-side and we saw 0 events. `limit:0` means
+    // "no stored history, just stream new events" and is clock-skew-proof.
     log('subscribing for the ack (kind 24133 → us)…');
-    const sub = pool.subscribe(NC_RELAYS, { kinds:[24133], '#p':[clientPub], since }, {
+    const sub = pool.subscribe(NC_RELAYS, { kinds:[24133], '#p':[clientPub], limit:0 }, {
       onevent: async (ev)=>{
         count++;
         let plain=null, enc='none';
@@ -609,7 +611,11 @@ window.__nact.connectNostrConnect = async function(onUri, log){
         if(resp && (resp.result===secret || resp.result==='ack' || (resp.result && !resp.error))){ try{sub.close()}catch{}; log('handshake OK — signer '+ev.pubkey.slice(0,10)+'…'); resolve(ev.pubkey); }
       },
     });
-    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer ('+count+' events seen). If 0 events: the signer relay is unreachable (VPN/filter?) or nsec.app didn\'t publish where we listen.')); }, 175000);
+    // Connectivity check only — informational, runs AFTER the real subscription
+    // is already live so it can't race it. A FAIL here is not fatal: nsec.app
+    // publishes the ack to every relay in the URI, so any one reaching it wins.
+    NC_RELAYS.forEach(async r=>{ try{ await pool.ensureRelay(r); log('relay reachable  '+r); }catch(e){ log('relay unreachable '+r+' — '+(e&&e.message||e)); } });
+    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer ('+count+' events seen). If 0 events: check the diagnostics above — at least one relay must say "reachable", and nsec.app must show the app under Connected apps.')); }, 175000);
   });
   log('building signer, asking get_public_key…');
   const bp = { pubkey: signerPubkey, relays: NC_RELAYS, secret };
