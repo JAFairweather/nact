@@ -24,6 +24,7 @@ relays" (Nact) to "execute a scoped operation on a box" (Nops).
                  perceive (data-in)     act (actions-out)
    protocol      Scoped Data Grants     Scoped Action Approvals
    ↳ instances   Nvoy, Nvelope, …       Nact (social) · Nops (server ops)
+   runtime       NCP (see ncp.md)       Nactor
 ```
 
 Nact and Nops are **siblings on one spine** — the enact pattern with different
