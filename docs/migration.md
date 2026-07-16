@@ -81,26 +81,38 @@ only what Nactor *does* with the result differs.
 - **Phase 0 — inventory (this doc + the ingest tool).** Deterministically classify
   the real env into a config document + a secrets manifest. No secrets leave the
   box; the tool emits key *names* and classes, config *values*.
-- **Phase 1 — Nactor as grantee, role keys into memory.** Nactor gets its own
-  nsec/npub (bootstrap on box). The Director issues each role nsec (A) as a
-  **credential-scope encrypted to Nactor's npub**; Nactor decrypts with its nsec
-  and registers the identity **in memory** — it signs as `luke@`/`nave@` from RAM,
-  no `<NAME>_NSEC` env, nothing written to disk. Directors + the Nact-domain slice
-  of E are the config. The env `<NAME>_NSEC` path remains only as a *bootstrap
-  fallback* until imports are proven, then is removed.
-- **Phase 2 — provider/infra credentials as scopes.** Move B/C to credential-scopes
-  (same encrypt-to-Nactor mechanism, later over Nvoy MCP). Nactor holds them in
-  memory and uses them in place — signs Telegram calls, registers the webhook from
-  the granted bot token — and drops those keys from `secrets.env`. No re-sealed
-  env file.
-- **Phase 3 — whole-box, in-memory brokering (optional, Option 2).** Other services
-  get their secrets from Nactor **in memory** — injected into the process at spawn
-  or fetched from a loopback broker — never from a file Nactor wrote. `secrets.env`
-  retires to a bootstrap stub (the `age` key + Nactor's nsec only).
+- **Phase 1 — Nactor as grantee + Director activation of role keys (BUILT).** Nactor
+  gets its own nsec/npub (bootstrap on box). The **durable role keys (A: `luke`,
+  `nave`) intentionally stay SOPS-at-rest** — per [`SECRETS.md`], they live encrypted
+  on the box so the agent can sign Telegram-approved posts with one tap and survive a
+  rebuild; importing them into local RAM would break that durability across a restart.
+  Instead, the Director **signs a NIP-98 activation** (`POST /api/activate-identity`)
+  authorizing Nactor to act as each on-box identity — a signed consent + audit record,
+  *no key material moves*. Moving role keys **off the box** is a *v2* concern (a remote
+  signer / enclave, still durable — see architecture.md "Where agents live"), **not**
+  local RAM. The role-key→RAM import path (`IMPORTED`) still exists and is the right
+  tool for *ephemeral* identities, just not for the durable ones.
+- **Phase 2 — provider/infra credentials as RAM-only scopes.** Move B/C
+  (`ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `PROPOSE_TOKEN`,
+  `OPENCLAW_GATEWAY_TOKEN`) to credential-scopes: the Director NIP-44-encrypts each to
+  Nactor's npub, NIP-98-signs a `PUT /api/credential`; Nactor decrypts and holds the
+  value **in RAM only — never on disk, never returned by the API** (import path proven
+  by smoke test). The open decision is the **consumption model**: (a) *Nactor brokers*
+  the outbound call — it holds the secret and makes the Anthropic/Telegram request
+  itself, so the value never leaves it (matches v2/v3); or (b) *boot-time loopback
+  injection* — the same-box consumer fetches its secret once at startup over a
+  localhost NIP-98 endpoint and keeps it in its own RAM. Ordering is per-secret and
+  reversible: **import (done) → wire one consumer via the chosen model → drop that key
+  from `secrets.env`**.
+- **Phase 3 — whole-box, in-memory brokering.** Generalize the chosen Phase-2 model to
+  every service; `secrets.env` retires to a bootstrap stub (the `age` key + Nactor's
+  nsec only).
 
 Each phase leaves the box working and is independently reversible. At no point does
 a decrypted secret land in a file a service reads — that intermediate is the thing
 we're explicitly avoiding.
+
+[`SECRETS.md`]: ../../luke/SECRETS.md
 
 ## The ingest tool
 

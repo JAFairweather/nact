@@ -252,6 +252,48 @@ The migration: point the runtime's config-read at Nvoy's MCP server instead of a
 file, publish config as a scope from the app instead of `PUT`, and turn on the
 reconcile loop. The NIP-98 HTTP path can stay as a fallback/local transport.
 
+## Where agents live: from box-bound to protocol-native
+
+A durable agent (Luke, Nave) is three separable things that today all happen to
+sit on one box:
+
+1. **its key** — who it is (an npub);
+2. **its authority** — what it may do (scoped grants + Director activations);
+3. **its runtime** — where it executes (a Nactor process).
+
+The end-state is to move (1) and (2) *onto nostr* so (3) becomes fungible: any
+box can **boot** the agent by attaching to its protocol-resident identity, and
+"does the key live on this box?" stops being a meaningful question. The
+primitives already exist:
+
+- **Key off the box (NIP-46).** The Director-activation loop (a signature
+  authorizing Nactor to act as an on-box key) generalizes: instead of the role
+  nsec sitting in SOPS, it lives in a **remote signer or enclave** (this is
+  exactly the shape of an enclave signer like `noauth-enclaved` — a durable
+  agent key in a Nitro enclave, signing over NIP-46). Nactor becomes a NIP-46
+  *client* signing *as* the agent, holding no role nsec at rest. Box compromise
+  exposes nothing.
+- **Authority as grants (NIP-DA).** The agent's power is revocable scoped grants
+  *from* key-holders *to* the agent's npub, published on the protocol — not box
+  config. Its Director activations are the same shape: on-protocol consent
+  records.
+- **Definition as events.** Mandate, channel bindings, tier policy — publishable
+  (encrypted where needed) as events keyed to the agent's npub. Any Nactor can
+  fetch and reconstitute the agent.
+
+The progression:
+
+| | what it is | key custody | boot story |
+| --- | --- | --- | --- |
+| **v1** (built) | role keys SOPS-on-box, custodial, Director-activated | encrypted at rest on the box | tied to this box |
+| **v2** | role key leaves the box for a remote signer/enclave; Nactor signs-*as*-agent via NIP-46 | off-box (remote signer / enclave) | box holds **zero** role nsecs; credentials are RAM-only scopes injected per boot |
+| **v3** | agent fully protocol-resident — identity + grants + mandate + activations all as events | off-box | boot *any* Nactor, point it at the agent's npub, it pulls its signer and its grants; the box is disposable compute |
+
+In this frame the role keys were never special or box-bound — SOPS-on-box is
+just v1's convenience. The RAM-only credential-scope path (secrets injected
+per boot, nothing at rest) is not only the fix for the env-cache problem; it is
+the exact machinery v2/v3 need.
+
 ## How it relates to the rest
 
 - [`threat-model.md`](threat-model.md) — WYSIWYS on the *act* side (what you
