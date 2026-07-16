@@ -256,6 +256,30 @@ function chooseSigner(){
     ov.addEventListener('click',e=>{if(e.target===ov)done(null)});
   });
 }
+// Drive a NIP-46 connect with a visible status: surface the signer's approval
+// URL as a real clickable link (never a popup, which browsers block), tell the
+// user to keep their signer open, and fail loudly after 60s instead of hanging.
+function connectWithStatus(bunkerStr){
+  return new Promise((resolve,reject)=>{
+    const ov=$(`<div style="position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.8)">
+      <div class="card" style="width:min(440px,94vw);text-align:center">
+        <h3 style="margin-bottom:8px">Connecting to your signer…</h3>
+        <div class="muted" id="cw-msg">Keep <b>nsec.app</b> open in another tab, signed in — the request reaches it over a relay, and it can only answer while it's running.</div>
+        <div id="cw-auth" style="margin-top:14px"></div>
+        <div class="row" style="justify-content:center;margin-top:16px"><button class="btn ghost" id="cw-cancel">Cancel</button></div>
+      </div></div>`);
+    document.body.appendChild(ov);
+    let settled=false;
+    const finish=(fn,v)=>{ if(settled)return; settled=true; clearTimeout(t); ov.remove(); fn(v); };
+    const t=setTimeout(()=>finish(reject,new Error('No response from your signer after 60s.\n\n• Make sure nsec.app is open (in another tab) and signed in.\n• Try generating a fresh bunker:// in nsec.app and pasting the new one.\n• A VPN or content filter can block the signer relay — turn it off if you have one.')),60000);
+    ov.querySelector('#cw-cancel').onclick=()=>finish(reject,new Error('cancelled'));
+    window.__nact.connectBunker(bunkerStr,(url)=>{
+      if(!url) return;
+      ov.querySelector('#cw-msg').innerHTML='Your signer wants you to <b>approve this connection</b> — open it here:';
+      ov.querySelector('#cw-auth').innerHTML=`<a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">Approve in your signer ↗</a>`;
+    }).then(conn=>finish(resolve,conn)).catch(e=>finish(reject,e));
+  });
+}
 async function goLive(){
   if(LIVE) return;
   const choice = await chooseSigner();
@@ -266,10 +290,9 @@ async function goLive(){
       if(!window.nostr) throw new Error('No browser extension (window.nostr) found.');
       SIGNER = { signEvent:(e)=>window.nostr.signEvent(e) };
     } else {
-      if(!window.__nact||!window.__nact.connectBunker) throw new Error('remote-signer client is still loading — try again in a moment');
+      if(!window.__nact||!window.__nact.connectBunker) throw new Error('remote-signer client is still loading — reload and try again');
       btn.textContent='approve in signer…';
-      const conn = await window.__nact.connectBunker(choice.str, (url)=>{ if(url) window.open(url,'_blank','noopener'); });
-      SIGNER = conn;   // { signEvent, npub }
+      SIGNER = await connectWithStatus(choice.str);   // shows status + approval link + times out
     }
     btn.textContent='connecting…';
     await refresh(); LIVE=true;
