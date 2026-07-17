@@ -81,11 +81,13 @@ const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the 
 // restarts (re-read each boot), no Director key needed on the box, and no value
 // is written back to disk or returned by the API. Add a provider by mapping its
 // broker name to the env var it arrives in.
-// gcal is an OAuth2 credential: the env var holds a JSON bundle
-// {client_id, client_secret, refresh_token} — Nactor mints short-lived access
-// tokens from it (see oauth.mjs), never the refresh token itself, and never
-// returns any of it.
-const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', google: 'GEMINI_API_KEY', gcal: 'GCAL_OAUTH_JSON' }
+// gworkspace is an OAuth2 credential: the env var holds a JSON bundle
+// {client_id, client_secret, refresh_token} from ONE Google OAuth client whose
+// scopes cover both Calendar (calendar.events) and Gmail read (gmail.readonly).
+// Nactor mints short-lived access tokens from it (see oauth.mjs), never the
+// refresh token itself, and never returns any of it. Both the gcal and gmail
+// broker providers below share this one credential.
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', google: 'GEMINI_API_KEY', gworkspace: 'GOOGLE_OAUTH_JSON' }
 for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
@@ -158,12 +160,28 @@ const BROKER_PROVIDERS = {
   // token. The host is pinned to googleapis.com and the caller may only reach
   // /calendar/v3/… — so a caller can't repoint egress, and never sees a token.
   gcal: {
-    credential: 'gcal',
+    credential: 'gworkspace',
     oauth: true,
     build: (body, accessToken) => {
       const p = String(body.path || '')
       if (!/^\/calendar\/v3\/[A-Za-z0-9._~%\/@:+-]*$/.test(p)) throw new Error(`path '${p}' not permitted for gcal (must be /calendar/v3/…)`)
       const base = (process.env.NACT_BROKER_BASE_GCAL || 'https://www.googleapis.com').replace(/\/$/, '')
+      return { url: base + p, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' } }
+    },
+  },
+  // Gmail (read). Same shared Google OAuth credential; the caller may only reach
+  // /gmail/v1/users/me/… read endpoints. Write protection is guaranteed by the
+  // gmail.readonly scope on the token (a readonly token can't send or modify),
+  // and reinforced by pinning the path to the read surface here.
+  gmail: {
+    credential: 'gworkspace',
+    oauth: true,
+    build: (body, accessToken) => {
+      const p = String(body.path || '')
+      if (!/^\/gmail\/v1\/users\/me\/(messages|threads|labels|profile)[A-Za-z0-9._~%\/@:+?=&-]*$/.test(p)) {
+        throw new Error(`path '${p}' not permitted for gmail (read-only: /gmail/v1/users/me/{messages,threads,labels,profile}…)`)
+      }
+      const base = (process.env.NACT_BROKER_BASE_GMAIL || 'https://gmail.googleapis.com').replace(/\/$/, '')
       return { url: base + p, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' } }
     },
   },
