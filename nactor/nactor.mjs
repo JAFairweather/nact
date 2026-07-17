@@ -92,6 +92,19 @@ for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
 }
+// gworkspace fallback: assemble the OAuth bundle from three PLAIN env vars when
+// GOOGLE_OAUTH_JSON isn't set. docker-compose env_file can't parse a raw JSON
+// value (its braces/quotes break the parser), so this is the box-friendly path —
+// three simple KEY=VALUE lines. SOPS-delivered JSON still works via the loop above.
+if (!CREDS.has('gworkspace')) {
+  const cid = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim()
+  const csec = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim()
+  const rtok = (process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '').trim()
+  if (cid && csec && rtok) {
+    CREDS.set('gworkspace', { type: 'provider-credential', target: 'credential:gworkspace', importedAt: Date.now(),
+      value: JSON.stringify({ client_id: cid, client_secret: csec, refresh_token: rtok }), source: 'bootstrap-env-parts' })
+  }
+}
 
 // Decrypt a credential-scope: NIP-44 ciphertext from the Director (its pubkey,
 // known from the NIP-98 signature) to Nactor's key. Returns plaintext or throws.
