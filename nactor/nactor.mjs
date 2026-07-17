@@ -177,7 +177,9 @@ const BROKER_PROVIDERS = {
     oauth: true,
     build: (body, accessToken) => {
       const p = String(body.path || '')
-      if (!/^\/calendar\/v3\/[A-Za-z0-9._~%\/@:+-]*$/.test(p)) throw new Error(`path '${p}' not permitted for gcal (must be /calendar/v3/…)`)
+      // events.list requires query params (timeMin/timeMax/singleEvents/…), so the
+      // char class allows ?=& like the gmail surface — still pinned to /calendar/v3/.
+      if (!/^\/calendar\/v3\/[A-Za-z0-9._~%\/@:+?=&,-]*$/.test(p)) throw new Error(`path '${p}' not permitted for gcal (must be /calendar/v3/…)`)
       const base = (process.env.NACT_BROKER_BASE_GCAL || 'https://www.googleapis.com').replace(/\/$/, '')
       return { url: base + p, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' } }
     },
