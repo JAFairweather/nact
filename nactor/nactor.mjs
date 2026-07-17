@@ -33,6 +33,7 @@ import { kindInfo } from '../src/inspect.mjs'
 import { loadSecret } from '../src/util/secret.mjs'
 import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
+import { oauthAccessToken } from './oauth.mjs'
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -80,7 +81,11 @@ const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the 
 // restarts (re-read each boot), no Director key needed on the box, and no value
 // is written back to disk or returned by the API. Add a provider by mapping its
 // broker name to the env var it arrives in.
-const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', google: 'GEMINI_API_KEY' }
+// gcal is an OAuth2 credential: the env var holds a JSON bundle
+// {client_id, client_secret, refresh_token} — Nactor mints short-lived access
+// tokens from it (see oauth.mjs), never the refresh token itself, and never
+// returns any of it.
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', google: 'GEMINI_API_KEY', gcal: 'GCAL_OAUTH_JSON' }
 for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
@@ -145,6 +150,21 @@ const BROKER_PROVIDERS = {
       if (!/^[a-zA-Z]+$/.test(m)) throw new Error(`telegram method '${m}' not permitted`)
       const base = (process.env.NACT_BROKER_BASE_TELEGRAM || 'https://api.telegram.org').replace(/\/$/, '')
       return { url: `${base}/bot${cred}/${m}`, headers: { 'content-type': 'application/json' } }
+    },
+  },
+  // Google Calendar — an OAuth2 provider. Unlike the static-key providers above,
+  // `oauth: true` tells the broker route to first mint a short-lived access token
+  // from the stored refresh-token bundle (oauth.mjs), then call build() with that
+  // token. The host is pinned to googleapis.com and the caller may only reach
+  // /calendar/v3/… — so a caller can't repoint egress, and never sees a token.
+  gcal: {
+    credential: 'gcal',
+    oauth: true,
+    build: (body, accessToken) => {
+      const p = String(body.path || '')
+      if (!/^\/calendar\/v3\/[A-Za-z0-9._~%\/@:+-]*$/.test(p)) throw new Error(`path '${p}' not permitted for gcal (must be /calendar/v3/…)`)
+      const base = (process.env.NACT_BROKER_BASE_GCAL || 'https://www.googleapis.com').replace(/\/$/, '')
+      return { url: base + p, headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' } }
     },
   },
 }
@@ -327,16 +347,30 @@ const server = createServer(async (req, res) => {
       if (!prov) return json(res, 400, { error: `unknown broker provider '${body.provider || ''}'` })
       const cred = CREDS.get(prov.credential)
       if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
+      // OAuth providers mint a short-lived access token from the stored refresh
+      // bundle first; static providers inject the value directly.
+      let accessToken = null
+      if (prov.oauth) {
+        try { accessToken = await oauthAccessToken(prov.credential, cred.value) }
+        catch (e) { return json(res, 502, { error: e?.message || 'oauth token error' }) }
+      }
       let target
-      try { target = prov.build(body, cred.value) } catch (e) { return json(res, 400, { error: e?.message || 'bad broker request' }) }
+      try { target = prov.oauth ? prov.build(body, accessToken) : prov.build(body, cred.value) }
+      catch (e) { return json(res, 400, { error: e?.message || 'bad broker request' }) }
       const method = String(body.method || 'POST').toUpperCase()
+      const reqBody = (method === 'GET' || method === 'HEAD') ? undefined : JSON.stringify(body.body ?? {})
       let upstream
       try {
-        upstream = await fetch(target.url, {
-          method,
-          headers: target.headers,
-          body: (method === 'GET' || method === 'HEAD') ? undefined : JSON.stringify(body.body ?? {}),
-        })
+        upstream = await fetch(target.url, { method, headers: target.headers, body: reqBody })
+        // An access token can be revoked/expired server-side despite our cache —
+        // on a 401 from an OAuth provider, force-refresh once and retry.
+        if (prov.oauth && upstream.status === 401) {
+          try {
+            accessToken = await oauthAccessToken(prov.credential, cred.value, { force: true })
+            target = prov.build(body, accessToken)
+          } catch (e) { return json(res, 502, { error: 'oauth re-auth failed: ' + (e?.message || String(e)) }) }
+          upstream = await fetch(target.url, { method, headers: target.headers, body: reqBody })
+        }
       } catch (e) { return json(res, 502, { error: 'broker upstream failed: ' + (e?.message || String(e)) }) }
       const text = await upstream.text().catch(() => '')
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' })
