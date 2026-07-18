@@ -280,9 +280,17 @@ const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 // Config carries the Director(s) and the Nactor's own address alongside the
 // channels/tiers/identity metadata — so the human decision-makers and which
 // runtime this config targets are part of the desired state, not deploy-time env.
+// Display handles default to `<key>@nave.pub`, but the env-key can diverge from
+// the identity's PUBLISHED nip05 (kind-0 + nave.pub/.well-known/nostr.json), which
+// is canonical for verification. NACTJAF_NSEC yields key `nactjaf`, but the
+// identity is published as `nact_jaf@nave.pub` — map it so the plane shows the
+// real, verifiable handle.
+const HANDLE_OVERRIDES = { nactjaf: 'nact_jaf@nave.pub' }
+const defaultHandle = k => HANDLE_OVERRIDES[k] || `${k}@nave.pub`
+
 function defaultConfig() {
   const identitiesMeta = {}
-  for (const k of Object.keys(IDS)) identitiesMeta[k] = { handle: `${k}@nave.pub`, signer: 'custodial', status: 'active' }
+  for (const k of Object.keys(IDS)) identitiesMeta[k] = { handle: defaultHandle(k), signer: 'custodial', status: 'active' }
   return {
     directors: BOOTSTRAP ? [nip19.npubEncode(BOOTSTRAP)] : [],
     nactorAddress: process.env.NACT_ADDRESS || '',
@@ -314,8 +322,11 @@ async function identitiesView() {
     let npub = null
     try { npub = nip19.npubEncode(getPublicKey(loadSecret(nsec))) } catch {}
     const meta = config.identitiesMeta[k] || {}
+    // Prefer an explicit custom handle, but if the persisted handle is just the
+    // auto-derived `<key>@nave.pub`, apply the canonical override instead.
+    const handle = (meta.handle && meta.handle !== `${k}@nave.pub`) ? meta.handle : defaultHandle(k)
     out.push({
-      key: k, handle: meta.handle || `${k}@nave.pub`, npub,
+      key: k, handle, npub,
       signer: meta.signer || 'custodial', status: meta.status || 'active',
       source: IMPORTED.has(k) ? 'imported (credential-scope, in memory)' : 'env (bootstrap fallback)',
       activated: (config.activations && config.activations[k]) || null,
