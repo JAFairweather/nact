@@ -418,10 +418,16 @@ const server = createServer(async (req, res) => {
       // A1/A2 — ownership enforcement (grant-derived, not an ACL). When on, a
       // non-Director caller must hold a Director-signed grant for THIS credential.
       // Kills blanket trust: an identity reaches only the credentials granted to
-      // it. Off by default; the entitlement map comes from each identity's own
+      // it. GRADUATED: a credential is enforced only once SOME on-box identity
+      // holds a grant for it — so a credential not yet migrated (e.g. telegram
+      // before Nact_jaf) stays on blanket trust and nothing breaks mid-cutover.
+      // Off entirely by default; entitlements come from each identity's own
       // grants (see startEntitlementReader).
-      if (ENFORCE_OWNERSHIP && !isDirector(pubkey) && !ENTITLEMENTS.get(pubkey)?.has(prov.credential)) {
-        return json(res, 403, { error: `caller not entitled to credential '${prov.credential}' — no Director grant names this identity` })
+      if (ENFORCE_OWNERSHIP && !isDirector(pubkey)) {
+        const graduated = [...ENTITLEMENTS.values()].some(set => set.has(prov.credential))
+        if (graduated && !ENTITLEMENTS.get(pubkey)?.has(prov.credential)) {
+          return json(res, 403, { error: `caller not entitled to credential '${prov.credential}' — no Director grant names this identity` })
+        }
       }
       const cred = CREDS.get(prov.credential)
       if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
