@@ -225,7 +225,10 @@ function mapState(st){
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
-  S.history=(st.history||[]).map(h=>({id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when:new Date(h.when).toLocaleTimeString(),relays:h.detail?(parseInt(h.detail)||0):0}));
+  S.history=(st.history||[]).map(h=> h.t==='activated'
+    ? {t:'activated',identity:h.identity,by:(h.by||'').slice(0,14),when:h.when?new Date(h.when).toLocaleString():'—'}
+    : {t:'enact',id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when:h.when?new Date(h.when).toLocaleString():'—',relays:h.detail?(parseInt(h.detail)||0):0});
+  S.entitlements=st.entitlements||{};
 }
 async function refresh(){ mapState(await api('GET','/api/state')); await loadProfiles(); draw(); }
 // Resolve kind-0 profiles for every Director + agent identity so the plane
@@ -521,11 +524,28 @@ function draw(){
       </table></div>`;
   }
   if(tab==='history'){
-    h=`<div class="grid">${S.history.map(e=>`<div class="card"><div class="row between">
-      <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
-        <div><h3 style="font-size:15px">${esc(e.klabel)} · ${esc(idOf(e.identity).handle)}</h3>
-        <div class="kv">id ${esc(e.fp)} · ${esc(e.when)}${e.outcome==='enacted'?` · ${e.relays} relays`:''}</div></div></div>
-      <span class="badge ${e.outcome==='enacted'?'b-ok':'b-rej'}">${e.outcome}</span></div></div>`).join('')}</div>`;
+    const ent=S.entitlements||{};
+    const entRows=Object.entries(ent).filter(([,creds])=>creds&&creds.length);
+    const standing = entRows.length ? `<div class="card" style="margin-bottom:14px">
+      <div class="label" style="margin-top:0">Standing credential grants</div>
+      <div class="muted" style="margin:2px 0 10px;font-size:12.5px">What each identity holds a live grant for right now (the credential-lifecycle log lives in Nvoy's Ledger). Names only — never values.</div>
+      ${entRows.map(([k,creds])=>`<div class="row" style="gap:8px;margin:6px 0">${avatarHTML(profileOf(idOf(k).npub), idOf(k).handle)}
+        <b style="min-width:120px">${esc(idOf(k).handle)}</b>
+        <div class="chips" style="margin:0">${creds.map(c=>`<span class="chip on">🔑 ${esc(c)}</span>`).join('')}</div></div>`).join('')}</div>` : '';
+    h=`<div class="muted" style="margin:0 0 12px">The audit of everything that happened on <b>this runtime</b> — Director activations and event enactments, newest first. (Credential grants/revocations are the Nvoy Ledger's job.)</div>
+      ${standing}
+      ${S.history.length ? `<div class="grid">${S.history.map(e=> e.t==='activated'
+        ? `<div class="card"><div class="row between">
+        <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
+          <div><h3 style="font-size:15px">✍ activated · ${esc(idOf(e.identity).handle)}</h3>
+          <div class="kv">Director authorized this key by signature${e.by?` (${esc(e.by)}…)`:''} · ${esc(e.when)}</div></div></div>
+        <span class="badge b-ok">activated</span></div></div>`
+        : `<div class="card"><div class="row between">
+        <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
+          <div><h3 style="font-size:15px">${esc(e.klabel)} · ${esc(idOf(e.identity).handle)}</h3>
+          <div class="kv">id ${esc(e.fp)} · ${esc(e.when)}${e.outcome==='enacted'?` · ${e.relays} relays`:''}</div></div></div>
+        <span class="badge ${e.outcome==='enacted'?'b-ok':'b-rej'}">${esc(e.outcome)}</span></div></div>`).join('')}</div>`
+        : `<div class="empty">No activations or enactments recorded yet on this runtime.</div>`}`;
   }
   v.innerHTML=h;
   // wire actions

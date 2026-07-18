@@ -390,6 +390,22 @@ function credentialsView() {
   return [...CREDS.entries()].map(([name, c]) => ({ name, type: c.type, target: c.target || null, importedAt: c.importedAt }))
 }
 
+// The runtime audit (AD-1): everything that happened ON this box, time-ordered —
+// Director activations + event-signing enactments — so History is the runtime's
+// honest record, not a blank enactment-only log. Distinct from Nvoy's grant
+// Ledger (the credential-lifecycle view). Standing credential grants ride
+// separately in /api/state.entitlements (they're state, not timestamped events).
+function runtimeAudit() {
+  const out = []
+  for (const [name, a] of Object.entries(config.activations || {})) {
+    if (a && a.at) out.push({ t: 'activated', identity: name, by: a.by || null, when: a.at })
+  }
+  for (const h of (approval.listHistory() || [])) {
+    out.push({ t: 'enact', id: h.id, identity: h.identity, kindLabel: h.kindLabel, outcome: h.outcome, fingerprint: h.fingerprint, detail: h.detail, when: h.when })
+  }
+  return out.sort((x, y) => (y.when || 0) - (x.when || 0))
+}
+
 const server = createServer(async (req, res) => {
   const path = (req.url || '/').split('?')[0]
   if (!path.startsWith('/api/')) return json(res, 404, { error: 'not found' })
@@ -537,7 +553,8 @@ const server = createServer(async (req, res) => {
         channels: config.channels,
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
-        history: approval.listHistory(),
+        history: runtimeAudit(),
+        entitlements: Object.fromEntries(ID_ENTITIES.map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
       })
     }
     if (path === '/api/propose' && req.method === 'POST') {
