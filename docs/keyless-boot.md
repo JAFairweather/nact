@@ -79,6 +79,30 @@ unsealed? Options, weakest → strongest:
 - The Director's unseal identity is the **nave-jaf / Director role** already being
   formalized (the same key that grants credentials and approves actions).
 
+## Open question (jaf): where do you approve the unseal?
+
+At boot, the box's own channels are down — Telegram isn't up (it needs the secret),
+and nvoy runs *on the box*. So the approval interface **cannot depend on the thing
+being unsealed.** The resolution is that the unseal request rides **external public
+nostr relays**, and you approve from **your own device** (a phone/laptop nostr
+client, or a tiny purpose-built "unseal" view) — neither the relays nor your device
+depend on the box being up. This is the chicken-and-egg the design must respect:
+the approval plane for *boot* is necessarily off-box, unlike the approval plane for
+*actions* (which can be on-box because the box is already running). Deferred to the
+keyless-boot phase; noted so it isn't rediscovered later.
+
+**Tiered boot (jaf).** The knot loosens if the box boots in stages. Some services
+need **no** secret and can come up first — a *tier 0* of Caddy + the static consoles
++ relay reachability. Crucially, **nvoy holds no box secret**: it's static files
+served by Caddy, and it signs with the *Director's own browser key* (NIP-07), never
+a key from the sealed bundle. So nvoy can be live in tier 0 and *be the very
+interface where you approve the unseal* — you open the console (your key, your
+device), approve, and that releases the root secret to the box's ephemeral boot
+key, bringing up *tier 1* (Nactor loads the bundle; luke/director/etc. follow).
+Open design work: which services are genuinely tier-0-safe, how the console hosts
+an "unseal request" view, and how a half-booted box advertises the pending request.
+Not yet fully specced — captured so the staging idea survives.
+
 This is a self-hosted, nostr-transported version of a well-established pattern
 (remote/auto unseal + measured boot). That it maps cleanly onto primitives we
 already run — gift-wrapped Director approvals, ephemeral keys, NIP-44 — is a strong
