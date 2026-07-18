@@ -499,7 +499,8 @@ function draw(){
       <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · Director <b>${esc(c.approver)}</b></div>
         ${c.credential?`<div class="muted" style="font-size:12px;margin-top:3px">🔗 credential-backed · <b>${esc(c.credential)}</b>${c.owner?` · owned by ${esc(idOf(c.owner).handle||c.owner)}`:''} — this channel <b>is</b> the credential (two faces of one grant)</div>`:''}</div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
-      <div class="label">Signs for these identities</div>
+      <div class="label">${c.credential?'Carries approvals for':'Signs for these identities'}</div>
+      ${c.credential?`<div class="muted" style="font-size:11.5px;margin:-2px 0 6px">these agents route their approvals <b>through</b> this channel — they don't own it (${esc(idOf(c.owner||'').handle||c.owner||'its owner')} does)</div>`:''}
       <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
       <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">${c.credential?'Sever routing':'Revoke channel'}</button>${c.credential?'<span class="hint" style="margin-left:8px">the credential stays; only approval routing is severed</span>':''}</div></div>`).join('')}
       <div class="card" style="border-style:dashed">

@@ -297,6 +297,14 @@ const defaultHandle = k => HANDLE_OVERRIDES[k] || `${k}@nave.pub`
 const APPROVAL_CHANNEL_CREDS = {
   'telegram-nactjaf': { name: 'Nact Approvals', owner: 'nactjaf' },
 }
+// Credential name aliases (rename transition). A Director grant may still name a
+// credential by its pre-rename scope — e.g. Nact_jaf's approvals grant was issued
+// as `telegram` before the provider became `telegram-nactjaf`. Accept the old
+// name as satisfying the new one so a rename can never lock an identity out of
+// its own credential. Remove an alias once the Director re-grants under the
+// canonical name.
+const CREDENTIAL_ALIASES = { 'telegram-nactjaf': ['telegram'] }
+const holdsCredential = (set, cred) => !!set && (set.has(cred) || (CREDENTIAL_ALIASES[cred] || []).some(a => set.has(a)))
 // Idempotently ensure every approvals credential has a matching channel entry.
 // Non-destructive: only ADDS a channel that isn't there (matched by its
 // `credential` tag), never overwrites one the Director has since edited or
@@ -503,8 +511,8 @@ const server = createServer(async (req, res) => {
       // Off entirely by default; entitlements come from each identity's own
       // grants (see startEntitlementReader).
       if (ENFORCE_OWNERSHIP && !isDirector(pubkey)) {
-        const graduated = [...ENTITLEMENTS.values()].some(set => set.has(prov.credential))
-        if (graduated && !ENTITLEMENTS.get(pubkey)?.has(prov.credential)) {
+        const graduated = [...ENTITLEMENTS.values()].some(set => holdsCredential(set, prov.credential))
+        if (graduated && !holdsCredential(ENTITLEMENTS.get(pubkey), prov.credential)) {
           return json(res, 403, { error: `caller not entitled to credential '${prov.credential}' — no Director grant names this identity` })
         }
       }
