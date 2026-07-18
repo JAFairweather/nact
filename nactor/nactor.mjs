@@ -235,6 +235,27 @@ const BROKER_PROVIDERS = {
   },
 }
 
+// A telegram broker provider for any bot-token credential. Used dynamically so a
+// per-agent comms bot (telegram-<agent>) works the moment its grant lands — no
+// code change, no restart.
+const tgProvider = (name) => ({
+  credential: name,
+  build: (body, cred) => {
+    const m = String(body.tgMethod || '')
+    if (!/^[a-zA-Z]+$/.test(m)) throw new Error(`telegram method '${m}' not permitted`)
+    const base = (process.env.NACT_BROKER_BASE_TELEGRAM || 'https://api.telegram.org').replace(/\/$/, '')
+    return { url: `${base}/bot${cred}/${m}`, headers: { 'content-type': 'application/json' } }
+  },
+})
+// Resolve a broker provider by name: a statically-defined one, or — for a
+// telegram-<x> bot whose credential is imported (e.g. a newly-granted per-agent
+// comms bot) — a dynamic telegram provider.
+function resolveProvider(name) {
+  if (BROKER_PROVIDERS[name]) return BROKER_PROVIDERS[name]
+  if (/^telegram-[a-z0-9-]+$/i.test(name) && CREDS.has(name)) return tgProvider(name)
+  return null
+}
+
 // Egress proxy (transparent). Unlike the RPC broker above — NIP-98-gated, for
 // OUR code — this serves THIRD-PARTY engines that speak a provider's native
 // protocol and can't sign: e.g. OpenClaw's own model calls to Anthropic/Gemini.
@@ -427,6 +448,23 @@ function runtimeAudit() {
   return out.sort((x, y) => (y.when || 0) - (x.when || 0))
 }
 
+// Comms channels derived from live entitlements: any telegram-<x> credential an
+// identity holds a grant for (except the shared approvals bot) surfaces as that
+// identity's own comms channel — so a newly-granted per-agent comms bot appears
+// without a restart. Display-only (comms covers = owner); not persisted.
+function derivedCommsChannels(existing) {
+  const have = new Set((existing || []).map(c => c.credential).filter(Boolean))
+  const out = []
+  for (const id of ID_ENTITIES) {
+    for (const cred of (ENTITLEMENTS.get(id.pub) || [])) {
+      if (have.has(cred) || !/^telegram-/.test(cred) || APPROVAL_CHANNEL_CREDS[cred]) continue
+      have.add(cred)
+      out.push({ id: cred, name: `${defaultHandle(id.name).split('@')[0]} — telegram`, kind: 'Telegram bot', purpose: 'comms', approver: null, covers: [id.name], status: 'active', credential: cred, owner: id.name })
+    }
+  }
+  return out
+}
+
 const server = createServer(async (req, res) => {
   const path = (req.url || '/').split('?')[0]
   if (!path.startsWith('/api/')) return json(res, 404, { error: 'not found' })
@@ -513,7 +551,7 @@ const server = createServer(async (req, res) => {
     if (path === '/api/broker' && req.method === 'POST') {
       if (!NACTOR_NPUB) return json(res, 503, { error: 'NACTOR_NSEC not configured — broker disabled' })
       if (!isDirector(pubkey) && !activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not a Director or an activated identity' })
-      const prov = BROKER_PROVIDERS[String(body.provider || '')]
+      const prov = resolveProvider(String(body.provider || ''))
       if (!prov) return json(res, 400, { error: `unknown broker provider '${body.provider || ''}'` })
       // A1/A2 — ownership enforcement (grant-derived, not an ACL). When on, a
       // non-Director caller must hold a Director-signed grant for THIS credential.
@@ -571,7 +609,7 @@ const server = createServer(async (req, res) => {
         bootstrap: BOOTSTRAP ? nip19.npubEncode(BOOTSTRAP) : null,  // the anchor that can't be removed
         identities: await identitiesView(),
         credentials: credentialsView(),
-        channels: config.channels,
+        channels: [...config.channels, ...derivedCommsChannels(config.channels)],
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
         history: runtimeAudit(),
