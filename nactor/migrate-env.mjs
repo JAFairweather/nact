@@ -35,7 +35,18 @@ const RULES = {
   PROPOSE_TOKEN:           ['infra-secret', 'bridge:propose-token'],
   GATE_SECRET:             ['infra-secret', 'session:gate-secret'],
   OPENCLAW_GATEWAY_TOKEN:  ['infra-secret', 'cockpit:gateway-token'],
+  OPENCLAW_GATEWAY_PASSWORD:['infra-secret', 'cockpit:gateway-password'],  // internal-client auth (2026-07)
   MY_BUNKER_URI:           ['infra-secret', 'signer:bunker-uri'],   // may embed a secret
+  // B — agent-era additions (2026-07): the gworkspace OAuth trio is ONE
+  // credential-scope; the two Telegram bots and Gmail IMAP are their own.
+  BRAIN_NSEC:              ['role-key', 'identity:brain'],
+  NACTOR_NSEC:             ['bootstrap', 'runtime-key'],   // stays on box (sanctioned)
+  TELEGRAM_LUKE_BOT_TOKEN: ['provider-credential', 'channel:telegram-luke/bot-token'],
+  GOOGLE_OAUTH_CLIENT_ID:  ['provider-credential', 'credential:gworkspace'],
+  GOOGLE_OAUTH_CLIENT_SECRET:['provider-credential', 'credential:gworkspace'],
+  GOOGLE_OAUTH_REFRESH_TOKEN:['provider-credential', 'credential:gworkspace'],
+  GOOGLE_OAUTH_JSON:       ['provider-credential', 'credential:gworkspace'],
+  GMAIL_APP_PASSWORD:      ['provider-credential', 'credential:gmail-imap'],
   // D — identities / addresses (public) → config
   LUKE_MASTER_NPUB:        ['identity', 'director'],
   NACT_MASTER_NPUB:        ['identity', 'director'],
@@ -43,6 +54,8 @@ const RULES = {
   MY_NPUB:                 ['identity', 'director'],
   MASTER_NIP05:            ['identity', 'director:nip05'],
   TELEGRAM_APPROVER_ID:    ['identity', 'channel:telegram/approver'],
+  GMAIL_ADDRESS:           ['identity', 'channel:gmail/address'],   // an email, public-ish
+  BRAIN_NPUB:              ['identity', 'director-or-identity'],
   // E — operational config (non-secret values are emitted)
   LUKE_RELAYS:             ['operational', 'relays'],
   NOIR_RELAYS:             ['operational', 'relays'],
@@ -63,6 +76,8 @@ const RULES = {
   GITHUB_OWNER:            ['operational', 'feed'],
   PROPOSE_URL:             ['operational', 'endpoint'],
   NACT_ADDRESS:            ['operational', 'nactor-address'],
+  NACT_BROKER_URL:         ['operational', 'endpoint'],
+  CAL_TZ:                  ['operational', 'flag'],
   LUKE_MANDATE:            ['operational', 'label'],
   LUKE_NAME:               ['operational', 'label'],
   ACME_EMAIL:              ['operational', 'acme'],
@@ -73,6 +88,7 @@ const RULES = {
   NACT_CONFIG:             ['runtime', 'path'],
   WS_NO_BUFFER_UTIL:       ['runtime', 'flag'],
   WS_NO_UTF_8_VALIDATE:    ['runtime', 'flag'],
+  TZ:                      ['runtime', 'flag'],
 }
 
 // Fallback patterns for keys not named above — conservative: an unknown
