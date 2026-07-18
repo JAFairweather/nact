@@ -30,8 +30,15 @@ export async function syncCredentialGrants({ relay, relayUrls, nactorSk, creds, 
   const owned = !relay
   const summary = { loaded: [], dropped: [], stale: [], errors: [] }
   try {
+    // `latestGrants` dedups per SCOPE (scopeId), so two grants that share a
+    // credential NAME but live in different scopes — e.g. a value re-issued as a
+    // fresh delegation to correct a mistyped token — both survive. Process them
+    // oldest→newest by issuedAt so the NEWEST grant is the last `creds.set` and
+    // wins: a corrected re-issue supersedes the stale one with no manual
+    // revocation. (Ties keep prior order — harmless; identical names, one value.)
     const grants = latestGrants(await receiveGrants(own, nactorSk))
       .filter(g => (g.scopeName || '').startsWith(CREDENTIAL_PREFIX))
+      .sort((a, b) => (a.issuedAt || 0) - (b.issuedAt || 0))
     for (const g of grants) {
       const name = g.scopeName.slice(CREDENTIAL_PREFIX.length)
       if (!name) { summary.errors.push('empty credential name'); continue }
