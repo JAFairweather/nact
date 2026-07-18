@@ -115,6 +115,34 @@ own keys and credentials with them.
 Each phase leaves the box working and is independently reversible. At no point is
 authority stored as a box-local list.
 
+## The grant manifest (this box, today)
+
+Derived from *who actually signs each broker call* — the consumer identity is the
+grantee, because at call time it authenticates as itself and (under A2) presents
+its own grant. **Luke is one agent, two keys:** a `brain` key that only *thinks*
+and *proposes*, and a `luke` key that *acts* — the exposed, LLM-driven faculty
+never holds the credentials that touch the world.
+
+| credential | owner (grantee) | why | value on box? |
+| --- | --- | --- | --- |
+| `anthropic` | **brain** | the thinking key; `luke-brain.mjs` signs its `/v1/messages` calls as brain | yes (env) |
+| `telegram-luke` | **luke** | Luke's own assistant bot (@luke_therealone_bot) — his voice to the Director | grant-only |
+| `gworkspace` (gcal+gmail) | **luke** | Luke reads world-state to feed the brain; the outward I/O is Luke's, not brain's | grant-only |
+| `telegram` (**Nact Approvals**) | **approval-plane identity** — *not* luke/brain | the Director's gating channel: every agent's proposal routes here for the human tap. It is approval-plane infrastructure, so it gets its **own** identity (the `NACT_CHANNEL` role key), not an agent's | yes (env) |
+
+**Code debt this exposes (A2 consumer wiring):** `luke-calendar.mjs` and
+`luke-morning.mjs` currently sign their `gcal`/`telegram`/`telegram-luke` broker
+calls **as brain** — brain acting directly, which it must never do. Those outward
+calls move to sign **as luke**; brain keeps only the `anthropic` `/think` call and
+the `/propose` handoff. The `telegram` approvals send moves to the approval-plane
+identity.
+
+**Issuance mechanism:** the console's Ledger **"＋ grant to another identity"**
+action re-grants each existing credential scope to its owner above — reusing the
+scope's key and published value (no secret re-entered), so the Director's own
+Grant Index is the only place the plaintext ever is. The prior grantee (the Nave
+Nactor) keeps its grant until A2 consumer wiring is proven, then it is revoked.
+
 ## How a new app plugs in (e.g. `warm.contact`)
 
 An app that wants an IMAP app-password (or any secret) on this box does **not**
