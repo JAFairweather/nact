@@ -106,7 +106,7 @@ const ID_ENTITIES = Object.entries(IDS)
 // Nactor mints short-lived access tokens from it (see oauth.mjs), never the
 // refresh token itself, and never returns any of it. Both the gcal and gmail
 // broker providers below share this one credential.
-const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', telegram: 'TELEGRAM_BOT_TOKEN', 'telegram-luke': 'TELEGRAM_LUKE_BOT_TOKEN', google: 'GEMINI_API_KEY', gworkspace: 'GOOGLE_OAUTH_JSON' }
+const BOOTSTRAP_CRED_ENV = { anthropic: 'ANTHROPIC_API_KEY', 'telegram-nactjaf': 'TELEGRAM_BOT_TOKEN', 'telegram-luke': 'TELEGRAM_LUKE_BOT_TOKEN', google: 'GEMINI_API_KEY', gworkspace: 'GOOGLE_OAUTH_JSON' }
 for (const [name, envk] of Object.entries(BOOTSTRAP_CRED_ENV)) {
   const v = (process.env[envk] || '').trim()
   if (v) CREDS.set(name, { type: 'provider-credential', target: `credential:${name}`, importedAt: Date.now(), value: v, source: 'bootstrap-env' })
@@ -177,8 +177,10 @@ const BROKER_PROVIDERS = {
       return { url: base + p, headers: { 'x-api-key': cred, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     },
   },
-  telegram: {
-    credential: 'telegram',
+  // The Nact-Approvals bot — owned by Nact_jaf. Named to match its owner (like
+  // telegram-luke is Luke's), so the credential a Director grants reads clearly.
+  'telegram-nactjaf': {
+    credential: 'telegram-nactjaf',
     build: (body, cred) => {
       const m = String(body.tgMethod || '')
       if (!/^[a-zA-Z]+$/.test(m)) throw new Error(`telegram method '${m}' not permitted`)
