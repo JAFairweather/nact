@@ -74,3 +74,56 @@ export function startGrantReader({ relayUrls, nactorSk, creds, intervalMs = 5 * 
   if (t.unref) t.unref()
   return { stop() { clearInterval(t) } }
 }
+
+// ---------------------------------------------------------------------------
+// A1/A2 — grant-derived entitlements (credential sovereignty).
+//
+// The step beyond "Nactor reads ITS OWN grants": read EACH on-box identity's
+// grants with THAT identity's key, so the broker can gate a call on whether a
+// Director-signed grant actually names the caller for the requested credential.
+// This is NOT a box-local ACL — the authority is the grant itself; the box only
+// verifies (decrypts) it. It's how "any activated identity may use any
+// credential" (blanket trust) becomes "an identity may use exactly the
+// credentials granted to it." `entitlements` is a live Map<pubHex, Set<name>>.
+//
+// A revoked grant (scope-key rotated past this identity) fetches 'stale' and is
+// simply not counted — revocation flows through with no extra machinery.
+export async function syncIdentityEntitlements({ relay, relayUrls, identities, entitlements, log = () => {} }) {
+  const own = relay || new LiveRelay(relayUrls)
+  const owned = !relay
+  const summary = {}
+  try {
+    for (const id of identities) {
+      const held = new Set()
+      try {
+        const grants = latestGrants(await receiveGrants(own, id.sk))
+          .filter(g => (g.scopeName || '').startsWith(CREDENTIAL_PREFIX))
+        for (const g of grants) {
+          const name = g.scopeName.slice(CREDENTIAL_PREFIX.length)
+          if (!name) continue
+          try { const s = await fetchScope(own, g); if (s.status === 'ok') held.add(name) } catch {}
+        }
+      } catch { /* transient read failure: keep the PRIOR entitlement set below */ }
+      // Only overwrite when we actually read something, so a transient relay
+      // failure never silently strips an identity of its entitlements mid-run.
+      if (held.size || !entitlements.has(id.pub)) entitlements.set(id.pub, held)
+      summary[id.name] = [...(entitlements.get(id.pub) || [])]
+    }
+  } finally {
+    if (owned) try { own.close() } catch {}
+  }
+  const line = Object.entries(summary).map(([n, cs]) => `${n}:[${cs.join(',') || '—'}]`).join(' ')
+  if (line) log(`  entitlements: ${line}`)
+  return summary
+}
+
+// Boot sweep + periodic re-sweep for the entitlement map. Returns stop().
+export function startEntitlementReader({ relayUrls, identities, entitlements, intervalMs = 5 * 60 * 1000, log = () => {} }) {
+  if (!identities?.length || !relayUrls?.length) { log('  entitlements: reader disabled (no identities / relays)'); return { stop() {} } }
+  const sweep = () => syncIdentityEntitlements({ relayUrls, identities, entitlements, log })
+    .catch(e => log(`  entitlements: sweep error ${e?.message || e}`))
+  sweep()
+  const t = setInterval(sweep, intervalMs)
+  if (t.unref) t.unref()
+  return { stop() { clearInterval(t) } }
+}

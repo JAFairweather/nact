@@ -34,7 +34,7 @@ import { loadSecret } from '../src/util/secret.mjs'
 import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
-import { startGrantReader } from './grant-reader.mjs'
+import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -74,6 +74,24 @@ const NACTOR_NPUB = NACTOR_PUB ? nip19.npubEncode(NACTOR_PUB) : null
 // API. Role keys additionally register an in-memory signer on `nact`.
 const CREDS = new Map()
 const IMPORTED = new Map()   // role-key name → { nsec, importedAt } (for the identities view)
+
+// A1/A2 — grant-derived entitlements (credential sovereignty). Nactor reads each
+// on-box identity's OWN grants (with that identity's key, which it already holds
+// in the env) to learn which credentials a Director actually granted to whom.
+// ENTITLEMENTS: pubHex → Set<credentialName>. The broker gates on this when
+// enforcement is ON — turning "any activated identity may use any credential"
+// into "an identity may use exactly the credentials granted to it." This is a
+// verify of the grant, NOT a box-local ACL: authority lives in the grant.
+const ENTITLEMENTS = new Map()
+// Default OFF so shipping the mechanism changes nothing. Flip on
+// (NACT_ENFORCE_CREDENTIAL_OWNERSHIP=1) only after the entitlement map is
+// verified and the beats sign as their OWNING identity — else a legitimate call
+// (e.g. a beat still signing as brain for a luke credential) would 403.
+const ENFORCE_OWNERSHIP = /^(1|true|yes|on)$/i.test(process.env.NACT_ENFORCE_CREDENTIAL_OWNERSHIP || '')
+// The on-box identities whose grants we read for entitlements (name, key, pub).
+const ID_ENTITIES = Object.entries(IDS)
+  .map(([name, { nsec }]) => { const sk = loadSecret(nsec); return sk ? { name, sk, pub: getPublicKey(sk) } : null })
+  .filter(Boolean)
 
 // Bootstrap provider credentials from env → CREDS at boot. This is the credential
 // analog of the role-key env loop above: SOPS delivers the secret to NACTOR's
@@ -323,6 +341,12 @@ const server = createServer(async (req, res) => {
       directorsConfigured: directorPubs().size,
       nactorNpub: NACTOR_NPUB,                     // the grantee address (public)
       credentials: CREDS.size,
+      // A1/A2: grant-derived entitlements (identity name → credential names it
+      // holds a live grant for). Names only, never values. Lets a Director verify
+      // the sovereign grants are readable on-box before flipping enforcement.
+      enforceOwnership: ENFORCE_OWNERSHIP,
+      entitlements: Object.fromEntries(ID_ENTITIES
+        .map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
     })
   }
 
@@ -391,6 +415,14 @@ const server = createServer(async (req, res) => {
       if (!isDirector(pubkey) && !activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not a Director or an activated identity' })
       const prov = BROKER_PROVIDERS[String(body.provider || '')]
       if (!prov) return json(res, 400, { error: `unknown broker provider '${body.provider || ''}'` })
+      // A1/A2 — ownership enforcement (grant-derived, not an ACL). When on, a
+      // non-Director caller must hold a Director-signed grant for THIS credential.
+      // Kills blanket trust: an identity reaches only the credentials granted to
+      // it. Off by default; the entitlement map comes from each identity's own
+      // grants (see startEntitlementReader).
+      if (ENFORCE_OWNERSHIP && !isDirector(pubkey) && !ENTITLEMENTS.get(pubkey)?.has(prov.credential)) {
+        return json(res, 403, { error: `caller not entitled to credential '${prov.credential}' — no Director grant names this identity` })
+      }
       const cred = CREDS.get(prov.credential)
       if (!cred) return json(res, 503, { error: `credential '${prov.credential}' not imported` })
       // OAuth providers mint a short-lived access token from the stored refresh
@@ -525,6 +557,12 @@ server.listen(PORT, () => {
   // ones of the same name — the migration path is: grant it, verify, drop the
   // env line. See docs/migration-status-2026-07.md.
   startGrantReader({ relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, log: console.log })
+  // A1/A2 — read each on-box identity's OWN grants (with its own key) to build the
+  // grant-derived entitlement map the broker gates on. Boot + every 5 min, so a
+  // Director's new grant / revocation flows through. Enforcement is separate
+  // (NACT_ENFORCE_CREDENTIAL_OWNERSHIP) — this reader just builds the map.
+  console.log(`  ownership enforcement: ${ENFORCE_OWNERSHIP ? 'ON' : 'off (blanket trust)'} · identities: ${ID_ENTITIES.map(i => i.name).join(', ') || '(none)'}`)
+  startEntitlementReader({ relayUrls: RELAYS, identities: ID_ENTITIES, entitlements: ENTITLEMENTS, log: console.log })
 })
 
 export { server, nact, config }
