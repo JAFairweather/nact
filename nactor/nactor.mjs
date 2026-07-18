@@ -301,20 +301,34 @@ const APPROVAL_CHANNEL_CREDS = {
 // Non-destructive: only ADDS a channel that isn't there (matched by its
 // `credential` tag), never overwrites one the Director has since edited or
 // severed. Returns true if it changed anything.
-function ensureCredentialChannels(cfg) {
+function ensureChannels(cfg) {
   let changed = false
   cfg.channels = cfg.channels || []
+  // 1) Every approvals credential surfaces as a channel (the two-faced link).
   for (const [cred, meta] of Object.entries(APPROVAL_CHANNEL_CREDS)) {
     if (!BROKER_PROVIDERS[cred]) continue                          // the provider/credential must exist
     if (cfg.channels.some(c => c.credential === cred)) continue    // already surfaced (or severed) — leave it
     cfg.channels.push({
       id: cred, name: meta.name, kind: 'Telegram bot', approver: 'director',
-      covers: Object.keys(IDS),   // every on-box identity can route approvals here by default; Director unwires in Routing
-      status: 'active',
+      covers: [], status: 'active',
       credential: cred,           // the two-faced link: this channel IS this credential
       owner: meta.owner,          // the identity that holds the credential grant
     })
     changed = true
+  }
+  // 2) Universal channels — the web approval queue and every approvals bot — must
+  // reach EVERY on-box identity, or a later-added agent silently has no approval
+  // path (exactly how brain/nactjaf drifted off the stale `web` covers). Union
+  // their covers with the current identity set; self-heals config drift. This is
+  // non-destructive (only adds). To stop an identity from acting, deactivate or
+  // revoke it — that's the lever, not unwiring it from the universal queue.
+  const universe = Object.keys(IDS)
+  for (const ch of cfg.channels) {
+    const universal = ch.id === 'web' || (ch.credential && APPROVAL_CHANNEL_CREDS[ch.credential])
+    if (!universal) continue
+    const cur = new Set(ch.covers || [])
+    for (const id of universe) if (!cur.has(id)) { cur.add(id); changed = true }
+    ch.covers = [...cur]
   }
   return changed
 }
@@ -335,9 +349,9 @@ function loadConfig() {
   let cfg
   try { if (existsSync(CONFIG_PATH)) cfg = { ...defaultConfig(), ...JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) } } catch (e) { console.warn('config load:', e.message) }
   cfg = cfg || defaultConfig()
-  // A credential that is also a channel (approvals bot) auto-surfaces here, so the
-  // channel manager reflects reality without a manual add. Persist if it changed.
-  if (ensureCredentialChannels(cfg)) { try { saveConfig(cfg) } catch (e) { console.warn('config save (channel derive):', e.message) } }
+  // Derive approvals-credential channels and self-heal universal-channel coverage
+  // (web queue + approvals bots reach every on-box identity). Persist if changed.
+  if (ensureChannels(cfg)) { try { saveConfig(cfg) } catch (e) { console.warn('config save (channels):', e.message) } }
   return cfg
 }
 function saveConfig(c) {
