@@ -87,38 +87,62 @@ repo deploy key, class C).
    silence).
 4. Root cause: building against memory of the design instead of re-reading it.
    The docs were right; the drift was operational.
+5. **2026-07-18 — a second drift, same root cause.** Reached for a bespoke
+   `grant.html` + HTTP `PUT /api/credential`→RAM as "the delivery half," when
+   Nvoy is the grant tool and credentials are relay-resident scopes Nactor reads
+   on boot. Retracted `grant.html`; §5 rewritten to the actual target. The
+   HTTP-PUT path (and `issue-credential.mjs`) stay only as a labelled fallback.
 
-## 5. The path back — staged, small, reversible
+## 5. The path back — corrected 2026-07-18 to the relay-resident target
 
-- **M1 · Re-inventory (Phase 0 refresh).** Run `migrate-env.mjs` over the real
-  current envs (luke.env + nactor.env + brain.env + openclaw.env + luke-mail.env);
-  commit the names-only manifest; retire dead keys (`PROPOSE_TOKEN`,
-  `OPENCLAW_GATEWAY_TOKEN`-legacy) while there.
-- **M2 · First grant (pilot): `telegram-luke`.** Director-side flow — Nact app
-  (or a 20-line CLI on the Director's device): NIP-44-encrypt the token to
-  Nactor's npub, NIP-98-sign `PUT /api/credential`. Nactor RAM-imports (path
-  already proven by smoke test). Verify the morning brief still sends, then
-  **delete the line from nactor.env**. First credential to meet the acceptance
-  criterion; the pattern is then mechanical.
-- **M3 · `gworkspace` + `anthropic` + approvals `telegram` as grants.** Same
-  flow; retire each env key on verify. `secrets.enc.env` shrinks to classes A +
-  D/E remnants.
-- **M4 · Restart-resilience decision.** Grants are re-fetchable; choose per
-  migration.md principle 2: re-import on restart (from relays / Director
-  re-issue) vs Nactor's *private* optional SOPS cache. Default: re-fetch;
-  cache only if relay availability bites.
-- **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy in Nactor; app password
-  becomes RAM-only, `mail/app-passwd` and the config-mounted secret path are
-  deleted; then the password itself arrives as a grant.
-- **M6 · Engine egress.** Point the engine's model calls at `/api/proxy`
-  (dummy-token) and drop `ANTHROPIC_API_KEY` from openclaw.env; decide
-  `OPENCLAW_GATEWAY_PASSWORD`'s tier (likely stays bootstrap-C).
-- **M7 · Config over Nvoy MCP.** The architecture.md transport swap: config +
-  credential scopes read via `get_config`-style MCP tools; HTTP stays fallback.
-  This completes Phase 2b→3 and opens v2 (enclave role keys).
+**The correction (Director's, 2026-07-18):** the delivery transport is NOT an
+HTTP `PUT /api/credential` into RAM. That endpoint (and its CLI twin
+`issue-credential.mjs`, and the retracted `grant.html`) is the V1 *fallback* and
+recreates the ephemerality the protocol exists to solve. The **target — and the
+plan — is what architecture.md already says**:
 
-Each milestone ends with: *verify consumer works → delete the env copy → note
-it here.* No milestone leaves two live sources of truth.
+- **Nvoy is the grant tool.** Credentials are issued as **NIP-DA credential-
+  scopes** from Nvoy's console (`nvoy.nave.pub`, `console/nvoygrant.mjs`) — the
+  token rides as the scope's data, gift-wrapped and granted to Nactor's npub,
+  with terms. The Director's key signs via NIP-07 and never touches the box.
+  *This side is already built and deployed.*
+- **Nactor reads its grants from the relays.** On boot and on a timer, Nactor
+  dereferences the credential-scopes granted to its npub **with its own nsec**,
+  decrypts, and loads the values into RAM. **There is no restart problem and no
+  cache** — a restart just re-reads from the relays. **Revocation = the Director
+  rotates the scope key in Nvoy** → Nactor's next read fails to decrypt → the
+  credential is gone. Same guarantee as any Nvoy data. *This is the one missing
+  piece — on the Nactor side only.*
+
+Restated acceptance criterion: **a credential is migrated when it exists only as
+a Nvoy-issued scope on the relays, Nactor loads it by reading that scope, and no
+env copy remains.** RAM is the runtime home; the *relays* are the durable home.
+
+- **M1 · Re-inventory — DONE (2026-07-18).** `migrate-env.mjs` classifies all 25
+  live keys with zero unknowns; the agent-era secrets are now in its rules.
+- **M2 · Nactor credential-scope reader (the real delivery).** Give Nactor the
+  NIP-DA read path: vendor `nipxx.mjs`; on boot + a timer, `receiveGrants` for
+  Nactor's npub, `fetchScope` each `credential:*` scope, load into `CREDS`.
+  Drop on rotation/expiry. Self-contained (Nactor already holds its nsec); no
+  dependency on Nvoy's MCP for V1. Unit-tested against an in-memory relay before
+  any deploy.
+- **M3 · Issue the pilot from Nvoy: `telegram-luke`.** From `nvoy.nave.pub`,
+  create a credential-scope carrying the token, grant it to Nactor's npub.
+  Verify Nactor picks it up and the morning brief still sends. **Then delete the
+  env line** — safe now, because a restart re-reads the scope from the relays.
+- **M4 · Migrate the rest as scopes.** `gworkspace`, `anthropic`, approvals
+  `telegram` — issued from Nvoy, read by Nactor, env keys retired on verify.
+- **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy; the Gmail app password
+  becomes a credential-scope + RAM-only; `mail/app-passwd` deleted.
+- **M6 · Engine egress.** Engine model calls → `/api/proxy` (dummy-token); drop
+  `ANTHROPIC_API_KEY` from openclaw.env.
+- **M7 · Nvoy MCP transport (the fuller target).** Nvoy's MCP holds Nactor's
+  nsec and serves config + credential scopes as MCP tools; Nactor reads with
+  "zero nostr knowledge." Completes Phase 2b→3, opens v2 (enclave role keys).
+
+Each milestone ends with: *verify consumer works → delete the env copy → note it
+here.* No milestone leaves two live sources of truth, and no milestone reaches
+for a local cache — the relays are the store.
 
 ## 6. Standing rules (so tonight doesn't repeat)
 
