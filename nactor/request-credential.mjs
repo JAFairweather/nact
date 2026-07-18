@@ -49,6 +49,19 @@ if (!directorPub) die('provide --director <npub> (or set NACT_DIRECTOR_NPUB / LU
 const relayUrls = (arg('relays', process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net'))
   .split(',').map(s => s.trim()).filter(Boolean)
 
+// The OWNER the credential should be granted to — the identity that will HOLD it,
+// which is NOT this runtime (the runtime proposes on the owner's behalf). Carried
+// as owner_npub so the Director's console pre-selects the right grantee instead of
+// defaulting to the requester. Omit for a self-request (runtime = owner).
+let owner_npub
+{
+  const o = arg('owner')
+  if (o) {
+    const oh = toPub(o); if (!oh) die('--owner must be an npub1… or 64-char hex pubkey')
+    owner_npub = nip19.npubEncode(oh)
+  }
+}
+
 // The value: from --env <VAR> (existing env credential) or omitted (--no-value).
 let enc_value
 if (!has('no-value')) {
@@ -58,7 +71,7 @@ if (!has('no-value')) {
   enc_value = nip44.encrypt(value, ck)                     // only the Director can read it; never logged
 }
 
-const content = { type: 'access_request', purpose, scope_name: scopeName, ...(enc_value ? { enc_value } : {}) }
+const content = { type: 'access_request', purpose, scope_name: scopeName, ...(enc_value ? { enc_value } : {}), ...(owner_npub ? { owner_npub } : {}) }
 const rumor = { kind: KIND_NVOY_MSG, created_at: Math.floor(Date.now() / 1000), tags: [], content: JSON.stringify(content), pubkey: getPublicKey(nsk) }
 const wrap = wrapEvent(rumor, nsk, directorPub)
 
@@ -66,7 +79,8 @@ const relay = new LiveRelay(relayUrls)
 try {
   const r = await relay.publish(wrap)
   console.log(`requested ${scopeName} — proposed to Director ${nip19.npubEncode(directorPub).slice(0, 14)}… ` +
-    `(${enc_value ? 'existing value carried, encrypted' : 'value to be pasted at approval'}); acks ${r.acks}/${r.of}`)
+    `(${enc_value ? 'existing value carried, encrypted' : 'value to be pasted at approval'}` +
+    `${owner_npub ? `; grant to owner ${owner_npub.slice(0, 16)}…` : ''}); acks ${r.acks}/${r.of}`)
   console.log(`from Nactor ${npub.slice(0, 16)}… → approve it in the Nvoy console (Pending access requests).`)
 } catch (e) { die('publish failed: ' + (e?.message || e)) }
 finally { relay.close() }
