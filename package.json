@@ -28,7 +28,8 @@
     "build:bunker": "esbuild ./nactor/bunker-entry.mjs --bundle --format=esm --platform=browser --target=es2020 --minify --outfile=assets/vendor/nostr-tools-bunker.mjs"
   },
   "dependencies": {
-    "nostr-tools": "^2.0.0"
+    "nostr-tools": "^2.0.0",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"
