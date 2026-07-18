@@ -35,6 +35,7 @@ import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
+import { publishEndpointAdvert } from './endpoint-advert.mjs'
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -711,6 +712,14 @@ server.listen(PORT, () => {
   // (NACT_ENFORCE_CREDENTIAL_OWNERSHIP) — this reader just builds the map.
   console.log(`  ownership enforcement: ${ENFORCE_OWNERSHIP ? 'ON' : 'off (blanket trust)'} · identities: ${ID_ENTITIES.map(i => i.name).join(', ') || '(none)'}`)
   startEntitlementReader({ relayUrls: RELAYS, identities: ID_ENTITIES, entitlements: ENTITLEMENTS, log: console.log })
+  // AD-2 — advertise this runtime's endpoint + relay list under its OWN key, so
+  // clients address it by identity (nactor@nave.pub) instead of a hard-coded URL.
+  // Replaceable events: moving the box just republishes. Non-fatal.
+  if (NACTOR_SK) publishEndpointAdvert({
+    nactorSk: NACTOR_SK, relayUrls: RELAYS,
+    endpoint: process.env.NACT_ADDRESS || 'https://nact.nave.pub/api',
+    now: Math.floor(Date.now() / 1000), log: console.log,
+  }).catch(e => console.log(`  endpoint-advert: ${e?.message || e}`))
 })
 
 export { server, nact, config }
