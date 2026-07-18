@@ -329,12 +329,15 @@ const COMMS_CHANNEL_CREDS = {
   'telegram-luke': { name: 'Luke — My Assistant', owner: 'luke' },
 }
 // Credential name aliases (rename transition). A Director grant may still name a
-// credential by its pre-rename scope — e.g. Nact_jaf's approvals grant was issued
-// as `telegram` before the provider became `telegram-nactjaf`. Accept the old
-// name as satisfying the new one so a rename can never lock an identity out of
-// its own credential. Remove an alias once the Director re-grants under the
-// canonical name.
-const CREDENTIAL_ALIASES = { 'telegram-nactjaf': ['telegram'] }
+// credential by its pre-rename scope; accept the old name as satisfying the new
+// one so a rename can never lock an identity out of its own credential. Add an
+// entry `{ '<canonical>': ['<old>'] }` during a rename, and remove it once the
+// Director re-grants under the canonical name.
+//   • `telegram` → `telegram-nactjaf`: retired 2026-07-18 — Nact_jaf now holds a
+//     Director grant under the canonical `telegram-nactjaf` (verified), so the
+//     shim is no longer load-bearing. The redundant `telegram` grant is harmless
+//     and can be revoked later (Director signature) as cleanup.
+const CREDENTIAL_ALIASES = {}
 const holdsCredential = (set, cred) => !!set && (set.has(cred) || (CREDENTIAL_ALIASES[cred] || []).some(a => set.has(a)))
 // A channel's purpose, inferred when it predates the `purpose` field.
 function channelPurpose(ch) {
