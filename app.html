@@ -493,11 +493,12 @@ function draw(){
   }
   if(tab==='channels'){
     h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
-      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · Director <b>${esc(c.approver)}</b></div></div>
+      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · Director <b>${esc(c.approver)}</b></div>
+        ${c.credential?`<div class="muted" style="font-size:12px;margin-top:3px">🔗 credential-backed · <b>${esc(c.credential)}</b>${c.owner?` · owned by ${esc(idOf(c.owner).handle||c.owner)}`:''} — this channel <b>is</b> the credential (two faces of one grant)</div>`:''}</div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
       <div class="label">Signs for these identities</div>
       <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
-      <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">Revoke channel</button></div></div>`).join('')}
+      <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">${c.credential?'Sever routing':'Revoke channel'}</button>${c.credential?'<span class="hint" style="margin-left:8px">the credential stays; only approval routing is severed</span>':''}</div></div>`).join('')}
       <div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add channel instance</h3>
         <div class="muted">Its secret (bot token / channel nsec) is stored SOPS-encrypted <b>on the box</b> — entered once, never shown again.</div>

@@ -288,6 +288,37 @@ const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 const HANDLE_OVERRIDES = { nactjaf: 'nact_jaf@nave.pub' }
 const defaultHandle = k => HANDLE_OVERRIDES[k] || `${k}@nave.pub`
 
+// Approvals-carrier credentials that ARE channels too. A telegram bot that
+// delivers approval cards to the Director is BOTH a broker credential and an
+// approval channel — one thing, two faces. Surface it in the channel manager /
+// routing derived from the credential, so the Director never hand-adds a channel
+// for a credential that already exists. (telegram-luke is direct messaging, not
+// an approval channel — deliberately absent.)
+const APPROVAL_CHANNEL_CREDS = {
+  'telegram-nactjaf': { name: 'Nact Approvals', owner: 'nactjaf' },
+}
+// Idempotently ensure every approvals credential has a matching channel entry.
+// Non-destructive: only ADDS a channel that isn't there (matched by its
+// `credential` tag), never overwrites one the Director has since edited or
+// severed. Returns true if it changed anything.
+function ensureCredentialChannels(cfg) {
+  let changed = false
+  cfg.channels = cfg.channels || []
+  for (const [cred, meta] of Object.entries(APPROVAL_CHANNEL_CREDS)) {
+    if (!BROKER_PROVIDERS[cred]) continue                          // the provider/credential must exist
+    if (cfg.channels.some(c => c.credential === cred)) continue    // already surfaced (or severed) — leave it
+    cfg.channels.push({
+      id: cred, name: meta.name, kind: 'Telegram bot', approver: 'director',
+      covers: Object.keys(IDS),   // every on-box identity can route approvals here by default; Director unwires in Routing
+      status: 'active',
+      credential: cred,           // the two-faced link: this channel IS this credential
+      owner: meta.owner,          // the identity that holds the credential grant
+    })
+    changed = true
+  }
+  return changed
+}
+
 function defaultConfig() {
   const identitiesMeta = {}
   for (const k of Object.keys(IDS)) identitiesMeta[k] = { handle: defaultHandle(k), signer: 'custodial', status: 'active' }
@@ -301,8 +332,13 @@ function defaultConfig() {
   }
 }
 function loadConfig() {
-  try { if (existsSync(CONFIG_PATH)) return { ...defaultConfig(), ...JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) } } catch (e) { console.warn('config load:', e.message) }
-  return defaultConfig()
+  let cfg
+  try { if (existsSync(CONFIG_PATH)) cfg = { ...defaultConfig(), ...JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) } } catch (e) { console.warn('config load:', e.message) }
+  cfg = cfg || defaultConfig()
+  // A credential that is also a channel (approvals bot) auto-surfaces here, so the
+  // channel manager reflects reality without a manual add. Persist if it changed.
+  if (ensureCredentialChannels(cfg)) { try { saveConfig(cfg) } catch (e) { console.warn('config save (channel derive):', e.message) } }
+  return cfg
 }
 function saveConfig(c) {
   try { mkdirSync(dirname(CONFIG_PATH), { recursive: true }) } catch {}
