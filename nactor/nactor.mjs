@@ -288,14 +288,24 @@ const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 const HANDLE_OVERRIDES = { nactjaf: 'nact_jaf@nave.pub' }
 const defaultHandle = k => HANDLE_OVERRIDES[k] || `${k}@nave.pub`
 
-// Approvals-carrier credentials that ARE channels too. A telegram bot that
-// delivers approval cards to the Director is BOTH a broker credential and an
-// approval channel — one thing, two faces. Surface it in the channel manager /
-// routing derived from the credential, so the Director never hand-adds a channel
-// for a credential that already exists. (telegram-luke is direct messaging, not
-// an approval channel — deliberately absent.)
+// Channels have a PURPOSE:
+//  • 'approval' — where an agent's proposals go to be GATED before they enact.
+//    SHARED across all agents (the web queue + Nact_jaf's telegram bot). The
+//    approve/reject taps are consumed by Nact.
+//  • 'comms'    — an agent's OWN line for normal, non-approval messaging (Luke's
+//    assistant bot today). PER-AGENT: it covers only its owner, and its updates
+//    are consumed by that agent's runtime (Luke's by the OpenClaw engine).
+// Why comms and approval can't be the same telegram bot: a bot token allows
+// exactly ONE update consumer (getUpdates OR webhook — two pollers = 409). Luke's
+// comms bot is consumed by OpenClaw; approvals must be consumed by Nact (to
+// receive the approve/reject callbacks). Same token, two consumers → conflict.
+// So they are separate BOTS whenever they are separate consumers. Sending is
+// unlimited, so the shared approvals bot may still send its own messages.
 const APPROVAL_CHANNEL_CREDS = {
   'telegram-nactjaf': { name: 'Nact Approvals', owner: 'nactjaf' },
+}
+const COMMS_CHANNEL_CREDS = {
+  'telegram-luke': { name: 'Luke — My Assistant', owner: 'luke' },
 }
 // Credential name aliases (rename transition). A Director grant may still name a
 // credential by its pre-rename scope — e.g. Nact_jaf's approvals grant was issued
@@ -305,35 +315,38 @@ const APPROVAL_CHANNEL_CREDS = {
 // canonical name.
 const CREDENTIAL_ALIASES = { 'telegram-nactjaf': ['telegram'] }
 const holdsCredential = (set, cred) => !!set && (set.has(cred) || (CREDENTIAL_ALIASES[cred] || []).some(a => set.has(a)))
-// Idempotently ensure every approvals credential has a matching channel entry.
-// Non-destructive: only ADDS a channel that isn't there (matched by its
-// `credential` tag), never overwrites one the Director has since edited or
-// severed. Returns true if it changed anything.
+// A channel's purpose, inferred when it predates the `purpose` field.
+function channelPurpose(ch) {
+  if (ch.purpose) return ch.purpose
+  if (ch.credential && COMMS_CHANNEL_CREDS[ch.credential]) return 'comms'
+  return 'approval'   // web queue + approvals bots + anything else default to approval
+}
+// Idempotently ensure credentials surface as channels of the right purpose, and
+// that APPROVAL channels reach every identity. Non-destructive: only ADDS or
+// backfills; never overwrites a Director's edit/sever. Returns true if changed.
 function ensureChannels(cfg) {
   let changed = false
   cfg.channels = cfg.channels || []
-  // 1) Every approvals credential surfaces as a channel (the two-faced link).
+  const byCred = cred => cfg.channels.find(c => c.credential === cred)
+  // 1) approval-carrier credential channels (shared)
   for (const [cred, meta] of Object.entries(APPROVAL_CHANNEL_CREDS)) {
-    if (!BROKER_PROVIDERS[cred]) continue                          // the provider/credential must exist
-    if (cfg.channels.some(c => c.credential === cred)) continue    // already surfaced (or severed) — leave it
-    cfg.channels.push({
-      id: cred, name: meta.name, kind: 'Telegram bot', approver: 'director',
-      covers: [], status: 'active',
-      credential: cred,           // the two-faced link: this channel IS this credential
-      owner: meta.owner,          // the identity that holds the credential grant
-    })
+    if (!BROKER_PROVIDERS[cred] || byCred(cred)) continue
+    cfg.channels.push({ id: cred, name: meta.name, kind: 'Telegram bot', purpose: 'approval', approver: 'director', covers: [], status: 'active', credential: cred, owner: meta.owner })
     changed = true
   }
-  // 2) Universal channels — the web approval queue and every approvals bot — must
-  // reach EVERY on-box identity, or a later-added agent silently has no approval
-  // path (exactly how brain/nactjaf drifted off the stale `web` covers). Union
-  // their covers with the current identity set; self-heals config drift. This is
-  // non-destructive (only adds). To stop an identity from acting, deactivate or
-  // revoke it — that's the lever, not unwiring it from the universal queue.
+  // 2) per-agent comms credential channels (owner's own line; owner-only covers)
+  for (const [cred, meta] of Object.entries(COMMS_CHANNEL_CREDS)) {
+    if (!BROKER_PROVIDERS[cred] || byCred(cred)) continue
+    cfg.channels.push({ id: cred, name: meta.name, kind: 'Telegram bot', purpose: 'comms', approver: null, covers: [meta.owner], status: 'active', credential: cred, owner: meta.owner })
+    changed = true
+  }
+  // 3) backfill purpose on any channel that predates the field
+  for (const ch of cfg.channels) { const p = channelPurpose(ch); if (ch.purpose !== p) { ch.purpose = p; changed = true } }
+  // 4) APPROVAL channels reach EVERY identity (self-heal drift); comms stay
+  // owner-only. To stop an identity acting, deactivate/revoke it — not unwiring.
   const universe = Object.keys(IDS)
   for (const ch of cfg.channels) {
-    const universal = ch.id === 'web' || (ch.credential && APPROVAL_CHANNEL_CREDS[ch.credential])
-    if (!universal) continue
+    if (channelPurpose(ch) !== 'approval') continue
     const cur = new Set(ch.covers || [])
     for (const id of universe) if (!cur.has(id)) { cur.add(id); changed = true }
     ch.covers = [...cur]
@@ -349,7 +362,7 @@ function defaultConfig() {
     nactorAddress: process.env.NACT_ADDRESS || '',
     activations: {},   // name → { by: <director npub>, at } — the Director's signed authorization to act as an on-box identity
     identitiesMeta,
-    channels: [{ id: 'web', name: 'Nact app', kind: 'Web queue (NIP-98)', approver: 'director', covers: Object.keys(IDS), status: 'active' }],
+    channels: [{ id: 'web', name: 'Nact app', kind: 'Web queue (NIP-98)', purpose: 'approval', approver: 'director', covers: Object.keys(IDS), status: 'active' }],
     tiers: { 0: 'critical', 1: 'low', 3: 'critical', 5: 'critical', 6: 'low', 7: 'low', 9734: 'elevated', 10002: 'critical' },
   }
 }

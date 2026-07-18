@@ -357,7 +357,11 @@ const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();
 const esc = s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const tierBadge = t=>`<span class="badge b-${t==='critical'?'crit':t==='elevated'?'elev':'low'}">${t}</span>`;
 const idOf = k=>S.identities.find(i=>i.key===k)||{handle:k};
-const channelsFor = k=>S.channels.filter(c=>c.covers.includes(k));
+const chPurpose = c=>c.purpose||'approval';
+const approvalChannels = ()=>S.channels.filter(c=>chPurpose(c)==='approval');
+const commsChannels = ()=>S.channels.filter(c=>chPurpose(c)==='comms');
+const channelsFor = k=>approvalChannels().filter(c=>c.covers.includes(k)); // approval routes for an identity
+const commsChannelFor = k=>commsChannels().find(c=>c.owner===k||(c.covers||[]).includes(k));
 const chanShort = c=>c.kind.split(' ')[0];   // "Telegram" / "NIP-59"
 // Identity resolution — real avatar / name / nip05 from the kind-0 profile
 // (populated by loadProfiles → window.__nact.fetchProfiles), keyed by npub.
@@ -419,10 +423,14 @@ function draw(){
       ${i.activated
         ? `<div class="hint" style="color:var(--low)">✓ activated — you authorized this key by signature${i.activated.by?` (${esc(i.activated.by.slice(0,14))}…)`:''}</div>`
         : (i.source&&i.source.indexOf('env')===0 ? `<div class="hint">on-box key — <b>not yet Director-activated</b>. Sign to authorize (no nsec — your signer holds it).</div>` : '')}
-      <div class="label">Approved through</div>
+      <div class="label">Approvals routed through</div>
       <div class="chips">${chs.length
-        ? chs.map(c=>`<span class="chip ${c.status==='active'?'on':''}">🔗 ${esc(c.name)} · ${esc(chanShort(c))}${c.status!=='active'?' (severed)':''}</span>`).join('')
-        : `<span class="chip warnchip">⚠ no channel — cannot be approved</span>`}</div>
+        ? chs.map(c=>`<span class="chip ${c.status==='active'?'on':''}">🛡 ${esc(c.name)} · ${esc(chanShort(c))}${c.status!=='active'?' (severed)':''}</span>`).join('')
+        : `<span class="chip warnchip">⚠ no approval channel — cannot be approved</span>`}</div>
+      <div class="label">Communications channel</div>
+      <div class="chips">${(()=>{const cc=commsChannelFor(i.key);return cc
+        ? `<span class="chip ${cc.status==='active'?'on':''}">💬 ${esc(cc.name)} · ${esc(chanShort(cc))}${cc.status!=='active'?' (severed)':''}</span>`
+        : `<span class="chip warnchip">no comms channel yet — this agent has no telegram bot of its own</span>`;})()}</div>
       <div class="acts">${LIVE&&!i.activated?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}<button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}
       <div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add identity</h3>
@@ -438,11 +446,12 @@ function draw(){
         </div></div></div>`;
   }
   if(tab==='routing'){
-    h=`<div class="card"><div class="label" style="margin-top:0">Routing — wire each identity to each channel</div>
-      <div class="muted" style="margin:6px 0 12px">Click a cell to bind or unbind. An identity can only be approved through channels it's wired to — its proposals are routed to every channel it's bound to.</div>
-      <table class="matrix"><thead><tr><th>Identity ╲ Channel</th>
-      ${S.channels.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
-      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}</td>${S.channels.map(c=>{
+    const rchans=approvalChannels();
+    h=`<div class="card"><div class="label" style="margin-top:0">Routing — wire each identity to each <b>approval</b> channel</div>
+      <div class="muted" style="margin:6px 0 12px">Click a cell to bind or unbind. Only <b>approval</b> channels appear here — where an identity's proposals go to be gated. (Communications channels are an agent's own line, managed in <b>Channels</b>.) Approval channels are shared and reach every agent by default.</div>
+      <table class="matrix"><thead><tr><th>Identity ╲ Approval channel</th>
+      ${rchans.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
+      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}</td>${rchans.map(c=>{
         const wired=c.covers.includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
         const cls=wired?(live?'on':'stale'):'off', mark=wired?(live?'✓':'✕'):'○';
         return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}</tr>`).join('')}</tbody></table>
@@ -495,15 +504,25 @@ function draw(){
       </div>`;
   }
   if(tab==='channels'){
-    h=`<div class="grid">${S.channels.map(c=>`<div class="card"><div class="row between">
-      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)} · Director <b>${esc(c.approver)}</b></div>
-        ${c.credential?`<div class="muted" style="font-size:12px;margin-top:3px">🔗 credential-backed · <b>${esc(c.credential)}</b>${c.owner?` · owned by ${esc(idOf(c.owner).handle||c.owner)}`:''} — this channel <b>is</b> the credential (two faces of one grant)</div>`:''}</div>
+    const chCard=c=>`<div class="card"><div class="row between">
+      <div><h3>${esc(c.name)}</h3><div class="muted">${esc(c.kind)}${c.approver?` · Director <b>${esc(c.approver)}</b>`:''}</div>
+        ${c.credential?`<div class="muted" style="font-size:12px;margin-top:3px">🔗 credential-backed · <b>${esc(c.credential)}</b>${c.owner?` · owned by ${esc(idOf(c.owner).handle||c.owner)}`:''}</div>`:''}</div>
       <span class="badge ${c.status==='active'?'b-ok':'b-off'}">${c.status}</span></div>
-      <div class="label">${c.credential?'Carries approvals for':'Signs for these identities'}</div>
-      ${c.credential?`<div class="muted" style="font-size:11.5px;margin:-2px 0 6px">these agents route their approvals <b>through</b> this channel — they don't own it (${esc(idOf(c.owner||'').handle||c.owner||'its owner')} does)</div>`:''}
-      <div class="chips">${c.covers.map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>
-      <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">${c.credential?'Sever routing':'Revoke channel'}</button>${c.credential?'<span class="hint" style="margin-left:8px">the credential stays; only approval routing is severed</span>':''}</div></div>`).join('')}
-      <div class="card" style="border-style:dashed">
+      ${chPurpose(c)==='comms'
+        ? `<div class="muted" style="font-size:12.5px;margin:8px 0 4px"><b>${esc(idOf(c.owner||'').handle||c.owner||'this agent')}</b>'s own line for normal messaging. Its updates are consumed by that agent's own runtime — a separate bot from approvals, because one telegram token allows only one update consumer.</div>`
+        : `<div class="label">Carries approvals for</div>
+      <div class="muted" style="font-size:11.5px;margin:-2px 0 6px">these agents route approvals <b>through</b> this shared channel — they don't own it${c.owner?` (${esc(idOf(c.owner).handle||c.owner)} does)`:''}</div>
+      <div class="chips">${(c.covers||[]).map(k=>`<span class="chip on">${esc(idOf(k).handle)}</span>`).join('')}</div>`}
+      <div class="acts"><button class="btn danger" data-revoke-ch="${c.id}">${c.credential?'Sever channel':'Revoke channel'}</button>${c.credential?'<span class="hint" style="margin-left:8px">the credential stays; only the channel routing is severed</span>':''}</div></div>`;
+    const appr=approvalChannels(), comms=commsChannels();
+    const noComms=S.identities.filter(i=>!commsChannelFor(i.key)).map(i=>i.handle);
+    h=`<div class="sect2" style="margin-top:0">🛡 Approval channels <span class="muted" style="font-weight:400">— shared; where any agent's proposals go to be gated</span></div>
+      <div class="grid">${appr.map(chCard).join('')||'<div class="empty">No approval channels.</div>'}</div>
+      <div class="sect2" style="margin-top:20px">💬 Communications channels <span class="muted" style="font-weight:400">— each agent's own line for normal (non-approval) messaging</span></div>
+      <div class="grid">${comms.map(chCard).join('')||''}</div>
+      ${noComms.length?`<div class="hint" style="margin-top:8px">No comms channel yet for <b>${noComms.map(esc).join(', ')}</b> — each needs its own telegram bot (its own update consumer, like Luke's). Provision a bot, grant it to that agent, and it appears here.</div>`:''}
+      <div class="sect2" style="margin-top:20px">Add a channel</div>
+      <div class="grid"><div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add channel instance</h3>
         <div class="muted">Its secret (bot token / channel nsec) is stored SOPS-encrypted <b>on the box</b> — entered once, never shown again.</div>
         <div class="form">
