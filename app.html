@@ -447,16 +447,26 @@ function draw(){
         </div></div></div>`;
   }
   if(tab==='routing'){
-    const rchans=approvalChannels();
-    h=`<div class="card"><div class="label" style="margin-top:0">Routing — wire each identity to each <b>approval</b> channel</div>
-      <div class="muted" style="margin:6px 0 12px">Click a cell to bind or unbind. Only <b>approval</b> channels appear here — where an identity's proposals go to be gated. (Communications channels are an agent's own line, managed in <b>Channels</b>.) Approval channels are shared and reach every agent by default.</div>
-      <table class="matrix"><thead><tr><th>Identity ╲ Approval channel</th>
-      ${rchans.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
+    const rchans=approvalChannels(), cchans=commsChannels();
+    const commsOwns=(c,k)=>c.owner===k||(c.covers||[]).includes(k);
+    h=`<div class="card"><div class="label" style="margin-top:0">Routing — approval vs. communications, side by side</div>
+      <div class="muted" style="margin:6px 0 12px">Two kinds of channel, laid out together so the difference is visible. <b>🛡 Approval</b> channels are the <b>shared gate</b> — where an identity's proposals go to be approved; they reach every agent, and you click a cell to bind/unbind. <b>💬 Communications</b> channels are each agent's <b>own line</b> for normal messaging (like Luke's assistant bot); each belongs to exactly one agent, so this side is read-only — ownership comes from the agent's credential grant, not a toggle.</div>
+      <table class="matrix"><thead>
+      <tr><th style="border:0"></th>
+        ${rchans.length?`<th colspan="${rchans.length}" style="text-align:center;color:var(--accent-bright);border-bottom:2px solid var(--accent-bright)">🛡 Approval — shared gate</th>`:''}
+        ${cchans.length?`<th colspan="${cchans.length}" style="text-align:center;color:var(--low);border-bottom:2px solid var(--low)">💬 Communications — own line</th>`:''}</tr>
+      <tr><th>Identity</th>
+      ${rchans.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}
+      ${cchans.map((c,ci)=>`<th${ci===0?' style="border-left:2px solid var(--low)"':''}>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
       <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}</td>${rchans.map(c=>{
         const wired=c.covers.includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
         const cls=wired?(live?'on':'stale'):'off', mark=wired?(live?'✓':'✕'):'○';
-        return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}</tr>`).join('')}</tbody></table>
-      <div class="muted" style="margin-top:10px;font-size:12.5px">✓ wired &amp; live · ✕ wired but the channel or identity is severed · ○ not wired — click to toggle</div></div>`;
+        return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
+        const owns=commsOwns(c,i.key), live=owns&&c.status==='active'&&i.status==='active';
+        const cls=owns?(live?'on':'stale'):'off', mark=owns?(live?'💬':'✕'):'·';
+        return `<td${ci===0?' style="border-left:2px solid var(--low)"':''}><span class="cell ${cls}" style="cursor:default" title="${owns?"this agent's own comms line":"not this agent's line"}">${mark}</span></td>`;}).join('')}</tr>`).join('')}</tbody></table>
+      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ○ not wired (click to toggle). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+      ${cchans.length<S.identities.length?`<div class="hint" style="margin-top:8px">Agents with a <b>·</b> in every Communications column have <b>no comms channel yet</b> — raise a request for one in <b>Channels</b>, then paste the bot token when it surfaces in Nvoy.</div>`:''}</div>`;
   }
   if(tab==='directors'){
     h=`<div class="card">
