@@ -34,6 +34,7 @@ import { loadSecret } from '../src/util/secret.mjs'
 import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
+import { startGrantReader } from './grant-reader.mjs'
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -517,6 +518,13 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length} · nactor key: ${NACTOR_NPUB ? NACTOR_NPUB.slice(0, 16) + '…' : 'MISSING (credential import disabled)'}`)
+  // The DELIVERY half: read credential-scopes granted to this npub from the
+  // relays (boot + every 5 min) and load them into CREDS. Durable across
+  // restarts (re-read, no cache); a Director's scope-key rotation drops the
+  // credential on the next sweep. Grant-sourced creds override bootstrap-env
+  // ones of the same name — the migration path is: grant it, verify, drop the
+  // env line. See docs/migration-status-2026-07.md.
+  startGrantReader({ relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, log: console.log })
 })
 
 export { server, nact, config }
