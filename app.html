@@ -226,9 +226,11 @@ function mapState(st){
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
-  S.history=(st.history||[]).map(h=> h.t==='activated'
-    ? {t:'activated',identity:h.identity,by:(h.by||'').slice(0,14),when:h.when?new Date(h.when).toLocaleString():'—'}
-    : {t:'enact',id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when:h.when?new Date(h.when).toLocaleString():'—',relays:h.detail?(parseInt(h.detail)||0):0});
+  S.history=(st.history||[]).map(h=>{const when=h.when?new Date(h.when).toLocaleString():'—';
+    if(h.t==='activated')return {t:'activated',identity:h.identity,by:(h.by||'').slice(0,14),when};
+    if(h.t==='grant-load'||h.t==='grant-update'||h.t==='grant-drop')return {t:h.t,credential:h.credential,generation:h.generation??null,when};
+    if(h.t==='entitlement-gain'||h.t==='entitlement-loss')return {t:h.t,identity:h.identity,credential:h.credential,when};
+    return {t:'enact',id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when,relays:h.detail?(parseInt(h.detail)||0):0}});
   S.entitlements=st.entitlements||{};
 }
 async function refresh(){ mapState(await api('GET','/api/state')); await loadProfiles(); draw(); }
@@ -567,20 +569,29 @@ function draw(){
       ${entRows.map(([k,creds])=>`<div class="row" style="gap:8px;margin:6px 0">${avatarHTML(profileOf(idOf(k).npub), idOf(k).handle)}
         <b style="min-width:120px">${esc(idOf(k).handle)}</b>
         <div class="chips" style="margin:0">${creds.map(c=>`<span class="chip on">🔑 ${esc(c)}</span>`).join('')}</div></div>`).join('')}</div>` : '';
-    h=`<div class="muted" style="margin:0 0 12px">The audit of everything that happened on <b>this runtime</b> — Director activations and event enactments, newest first. (Credential grants/revocations are the Nvoy Ledger's job.)</div>
+    h=`<div class="muted" style="margin:0 0 12px">The audit of everything that happened on <b>this runtime</b> — Director activations, event enactments, and what it loaded or dropped from Director-signed grants, newest first. (The issuance-side lifecycle — who granted what, rotations — is the Nvoy Ledger's job.)</div>
       ${standing}
-      ${S.history.length ? `<div class="grid">${S.history.map(e=> e.t==='activated'
-        ? `<div class="card"><div class="row between">
+      ${S.history.length ? `<div class="grid">${S.history.map(e=>{
+        if(e.t==='activated')return `<div class="card"><div class="row between">
         <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
           <div><h3 style="font-size:15px">✍ activated · ${esc(idOf(e.identity).handle)}</h3>
           <div class="kv">Director authorized this key by signature${e.by?` (${esc(e.by)}…)`:''} · ${esc(e.when)}</div></div></div>
-        <span class="badge b-ok">activated</span></div></div>`
-        : `<div class="card"><div class="row between">
+        <span class="badge b-ok">activated</span></div></div>`;
+        if(e.t==='grant-load'||e.t==='grant-update'||e.t==='grant-drop')return `<div class="card"><div class="row between">
+        <div><h3 style="font-size:15px">🔑 ${e.t==='grant-load'?'credential loaded from grant':e.t==='grant-update'?'credential updated from grant':'credential dropped — grant revoked'} · <span class="mono">${esc(e.credential||'')}</span></h3>
+          <div class="kv">read from the relays by this runtime${e.generation!=null?` · gen ${e.generation}`:''} · ${esc(e.when)}</div></div>
+        <span class="badge ${e.t==='grant-drop'?'b-rej':'b-ok'}">${e.t.slice(6)}</span></div></div>`;
+        if(e.t==='entitlement-gain'||e.t==='entitlement-loss')return `<div class="card"><div class="row between">
+        <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
+          <div><h3 style="font-size:15px">🔑 entitlement ${e.t==='entitlement-gain'?'gained':'lost'} · ${esc(idOf(e.identity).handle)}</h3>
+          <div class="kv">Director grant for <span class="mono">${esc(e.credential||'')}</span> ${e.t==='entitlement-gain'?'verified on-box':'no longer readable (revoked or rotated)'} · ${esc(e.when)}</div></div></div>
+        <span class="badge ${e.t==='entitlement-gain'?'b-ok':'b-rej'}">${e.t==='entitlement-gain'?'gained':'lost'}</span></div></div>`;
+        return `<div class="card"><div class="row between">
         <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
           <div><h3 style="font-size:15px">${esc(e.klabel)} · ${esc(idOf(e.identity).handle)}</h3>
           <div class="kv">id ${esc(e.fp)} · ${esc(e.when)}${e.outcome==='enacted'?` · ${e.relays} relays`:''}</div></div></div>
-        <span class="badge ${e.outcome==='enacted'?'b-ok':'b-rej'}">${esc(e.outcome)}</span></div></div>`).join('')}</div>`
-        : `<div class="empty">No activations or enactments recorded yet on this runtime.</div>`}`;
+        <span class="badge ${e.outcome==='enacted'?'b-ok':'b-rej'}">${esc(e.outcome)}</span></div></div>`}).join('')}</div>`
+        : `<div class="empty">No activations, enactments, or grant events recorded yet on this runtime.</div>`}`;
   }
   v.innerHTML=h;
   // wire actions
