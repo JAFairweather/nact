@@ -142,12 +142,20 @@ export function authStrategy(cred) {
 // riding in the mail credential itself. `force` re-mints past the cache — used
 // exactly once after an IMAP auth failure.
 export async function resolveAuth(cred, { credName = 'mail', resolveCredential = () => null, force = false, mintToken = oauthAccessToken } = {}) {
-  const user = cred.user
+  const user = typeof cred.user === 'string' ? cred.user.trim() : cred.user
   if (typeof user !== 'string' || !user) throw new MailError('mail credential missing user')
   const strategy = authStrategy(cred)
   if (strategy === 'password') {
-    if (typeof cred.pass !== 'string' || !cred.pass) throw new MailError('mail credential missing pass')
-    return { user, pass: cred.pass }
+    if (typeof cred.pass !== 'string' || !cred.pass.trim()) throw new MailError('mail credential missing pass')
+    // Normalize paste artifacts: values arrive through a console form and a
+    // relay round trip — trim edges, and collapse the interior spaces of
+    // Google's app-password DISPLAY shape (four groups of four). Gmail
+    // rejects the spaced form over IMAP LOGIN; a stray trailing newline is
+    // equally fatal and invisible. Passwords that legitimately contain
+    // interior whitespace (non-Google shapes) pass through untouched.
+    let pass = cred.pass.trim()
+    if (/^(?:[^\s]{4}[ ]){3}[^\s]{4}$/.test(pass)) pass = pass.replaceAll(' ', '')
+    return { user, pass }
   }
   let cacheName = credName, bundle = cred
   if (cred.oauth_cred) {
