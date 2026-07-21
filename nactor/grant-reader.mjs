@@ -190,6 +190,20 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
     summary.untrusted = before - grants.length
   }
   const seen = new Map()  // credential name → scope id, for the same-name warning
+  // Names with at least one ACTIVE grant in THIS listing. A severed scope may
+  // share its credential name with a live re-issue (the console's supersede
+  // pattern); severance must never clobber the sibling the same sweep loads —
+  // the 2026-07-21 incident: revoke-old + re-issue-new produced
+  // loaded[mail-gmail] · dropped[mail-gmail] every sweep.
+  const activeByName = new Map()   // name → Set of ACTIVE scope ids carrying it
+  for (const g of grants.filter(g => !g.status || g.status === 'active')) {
+    const n = (g.scope_name || '').slice(CREDENTIAL_PREFIX.length)
+    if (!n) continue
+    if (!activeByName.has(n)) activeByName.set(n, new Set())
+    activeByName.get(n).add(g.d)
+  }
+  const hasLiveSibling = (name, exceptD) =>
+    [...(activeByName.get(name) || [])].some(d => d !== exceptD)
   for (const g of grants) {
     const name = (g.scope_name || '').slice(CREDENTIAL_PREFIX.length)
     if (!name) { summary.errors.push('empty credential name'); continue }
@@ -199,13 +213,14 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
     // relinquished / expired never dereference, so treat the status like a
     // failed fetch on the relay path — drop only what WE loaded from a grant.
     if (g.status && g.status !== 'active') {
+      summary.stale.push(name)
+      if (hasLiveSibling(name, g.d)) continue      // a live sibling carries this name
       const cur = creds.get(name)
       if (cur && cur.source === 'grant') {
         creds.delete(name)
         summary.dropped.push(name)
         onEvent({ t: 'grant-drop', credential: name, when: Date.now() })
       }
-      summary.stale.push(name)
       continue
     }
     try {
@@ -229,14 +244,17 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
     } catch (e) {
       if (e instanceof McpToolError && SEVERED.has(e.code)) {
         // Verified severance (rotation past the grant, terms expiry, or a
-        // relinquishment): the credential is gone. Only drop what we loaded.
-        const cur = creds.get(name)
-        if (cur && cur.source === 'grant') {
-          creds.delete(name)
-          summary.dropped.push(name)
-          onEvent({ t: 'grant-drop', credential: name, when: Date.now() })
-        }
+        // relinquishment): the credential is gone. Only drop what we loaded —
+        // and never out from under a live same-name sibling in this listing.
         summary.stale.push(name)
+        if (!hasLiveSibling(name, g.d)) {
+          const cur = creds.get(name)
+          if (cur && cur.source === 'grant') {
+            creds.delete(name)
+            summary.dropped.push(name)
+            onEvent({ t: 'grant-drop', credential: name, when: Date.now() })
+          }
+        }
       } else {
         // NVOY_SCOPE_UNAVAILABLE, NVOY_NO_GRANT (list/read race), transport
         // blips: transient — keep whatever we hold (asymmetric by design).
