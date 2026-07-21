@@ -41,7 +41,7 @@ Per [`architecture.md`](architecture.md) — grant → receive → act:
 | 0 · inventory | classify env via `migrate-env.mjs` | **STALE** — predates tonight's four new secrets; re-run needed |
 | 1 · grantee + activations | Nactor nsec/npub; Director activates role identities | **DONE** — luke, nave, brain activated; bootstrap Director anchored |
 | 2a · consumption (broker) | consumers reach providers only through Nactor | **LIVE and carrying real traffic** — see table below |
-| 2b · delivery (grants) | credentials arrive as Director-signed scopes, env keys retired | **READER LIVE (M2, 2026-07-21)** — Nactor reads credential-scopes from the relays on boot + timer; still **zero grants issued, zero env keys retired** — that's M3+, per-credential |
+| 2b · delivery (grants) | credentials arrive as Director-signed scopes, env keys retired | **LIVE, CARRYING ALL 7 (verified 2026-07-21)** — grants were issued 2026-07-18 (ahead of this doc — see §3 correction); the reader loads every credential from relay scopes each sweep. Env fallback lines remain only for `anthropic` + approvals `telegram` — delete on verify closes M4 |
 | 3 · whole-box | every service brokered; env → bootstrap stub | not started |
 | v2/v3 · agent residency | role keys to enclave/NIP-46; agent protocol-resident | design only |
 
@@ -55,6 +55,20 @@ box.
 Tier key: **G** = grant-delivered (target) · **S** = SOPS root (`secrets.enc.env`)
 · **B** = box-local plaintext env (gitignored) · **D** = on-disk file read by
 consumers · **E** = engine SecretRef store.
+
+> **2026-07-21 correction — the box moved ahead of this table on 2026-07-18.**
+> The Nvoy Ledger + a runtime probe (container env names + reader logs) show:
+> every provider credential below now arrives as a Director-signed scope
+> (`credential:{telegram-luke, gworkspace, anthropic, telegram,
+> telegram-nactjaf, telegram-brain, telegram-nave}` — the last two are
+> beyond-plan per-agent comms bots), the reader loads all of them each sweep,
+> and the env copies for `TELEGRAM_LUKE_BOT_TOKEN` and `GOOGLE_OAUTH_*` are
+> already deleted. Still bootstrap-env on the box: `ANTHROPIC_API_KEY` and
+> approvals `TELEGRAM_BOT_TOKEN` (both now redundant fallbacks — grant-sourced
+> values override them; delete on verify). `GEMINI_API_KEY` is gone from the
+> env with no `google` grant issued — the `google` broker credential currently
+> exists nowhere; re-grant it or retire the provider entry. Rows below are as
+> written 2026-07-17 — read them with this correction.
 
 | credential | class | today | brokered use | target | gap |
 | --- | --- | --- | --- | --- | --- |
@@ -151,12 +165,26 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
     issues); `.secret`/`.key`/`.api_key`/bare-string are honored on read so one
     issuance feeds every reader (warm.contact's Swift reader accepts
     `key`/`api_key`/`value`).
-- **M3 · Issue the pilot from Nvoy: `telegram-luke`.** From `nvoy.nave.pub`,
-  create a credential-scope carrying the token, grant it to Nactor's npub.
-  Verify Nactor picks it up and the morning brief still sends. **Then delete the
-  env line** — safe now, because a restart re-reads the scope from the relays.
-- **M4 · Migrate the rest as scopes.** `gworkspace`, `anthropic`, approvals
-  `telegram` — issued from Nvoy, read by Nactor, env keys retired on verify.
+- **M3 · Issue the pilot from Nvoy: `telegram-luke` — DONE (issued 2026-07-18,
+  verified 2026-07-21, nact#2).** The scope was created from `nvoy.nave.pub`
+  via the request→Issue loop (the Ledger's purpose line is
+  `request-credential.mjs`'s default), granted to Nactor's npub, and the env
+  line is deleted — the runtime probe shows `TELEGRAM_LUKE_BOT_TOKEN` absent
+  and the reader logging `credential-grants: loaded [telegram-luke, …]` every
+  sweep. **Rollback path:** re-add the env line to `nactor.env` from the
+  Bitwarden note and restart — the bootstrap-env loader stays wired and a
+  grant-sourced value simply overrides it again once the relays are readable.
+  (Same rollback shape applies to every migrated credential.)
+- **M4 · Migrate the rest as scopes — ISSUED (2026-07-18); two env retirements
+  remain.** `gworkspace`, `anthropic`, approvals `telegram` (+ beyond-plan
+  per-agent comms bots `telegram-brain`, `telegram-nave`) are all issued from
+  Nvoy and read by Nactor each sweep. `GOOGLE_OAUTH_*` env is retired.
+  Outstanding: delete `ANTHROPIC_API_KEY` and `TELEGRAM_BOT_TOKEN` from the
+  box env after verify — the latter completes the approvals-bot flip to
+  `@navenactorbot` (the granted `telegram-nactjaf` re-issue carries the new
+  token; the env line still holds the old bot's), so verify approvals arrive
+  from the new bot before deleting. Note: `GEMINI_API_KEY` left the env with
+  no `google` grant issued — decide re-grant vs retire the provider.
 - **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy; the Gmail app password
   becomes a credential-scope + RAM-only; `mail/app-passwd` deleted.
 - **M6 · Engine egress.** Engine model calls → `/api/proxy` (dummy-token); drop
