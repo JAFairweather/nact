@@ -89,10 +89,29 @@ const ENTITLEMENTS = new Map()
 // verified and the beats sign as their OWNING identity — else a legitimate call
 // (e.g. a beat still signing as brain for a luke credential) would 403.
 const ENFORCE_OWNERSHIP = /^(1|true|yes|on)$/i.test(process.env.NACT_ENFORCE_CREDENTIAL_OWNERSHIP || '')
-// The on-box identities whose grants we read for entitlements (name, key, pub).
-const ID_ENTITIES = Object.entries(IDS)
-  .map(([name, { nsec }]) => { const sk = loadSecret(nsec); return sk ? { name, sk, pub: getPublicKey(sk) } : null })
-  .filter(Boolean)
+// The runtime identities whose grants we read for entitlements (name, key, pub).
+// A FUNCTION, evaluated per sweep/request, so identities imported at runtime
+// (role-key credential-scopes) are swept too — "each runtime identity", not just
+// the boot-time env set. On a name collision IMPORTED wins: it's the effective
+// signer, matching identitiesView.
+function idEntities() {
+  const out = [], seen = new Set()
+  for (const [name, rec] of [...IMPORTED.entries(), ...Object.entries(IDS)]) {
+    if (seen.has(name)) continue
+    seen.add(name)
+    try { const sk = loadSecret(rec.nsec); if (sk) out.push({ name, sk, pub: getPublicKey(sk) }) } catch {}
+  }
+  return out
+}
+
+// AD-1 — grant OBSERVATIONS are runtime events: what THIS box loaded, updated,
+// or dropped from Director-signed grants, and which entitlements it derived or
+// lost. Timestamped, in-memory, bounded (like the enactment history; a restart
+// re-derives current state from the relays anyway). The issuance-side lifecycle
+// — who granted what to whom, rotations — stays in Nvoy's Ledger: History
+// records what the box observed, the Ledger records what the Director did.
+const GRANT_AUDIT = []
+const recordGrantEvent = e => { GRANT_AUDIT.push(e); if (GRANT_AUDIT.length > 200) GRANT_AUDIT.shift() }
 
 // Bootstrap provider credentials from env → CREDS at boot. This is the credential
 // analog of the role-key env loop above: SOPS delivers the secret to NACTOR's
@@ -431,16 +450,25 @@ async function identitiesView() {
   return out
 }
 
-// Credentials summary — NAMES/types/targets only, never values.
+// Credentials summary — NAMES/types/targets/provenance only, never values.
+// `source` is the migration's honest ledger per credential: 'grant' (delivered
+// as a Director-signed scope — the target), 'bootstrap-env'/'bootstrap-env-parts'
+// (the env fallback being drained), or 'director-put' (the V1 HTTP fallback).
 function credentialsView() {
-  return [...CREDS.entries()].map(([name, c]) => ({ name, type: c.type, target: c.target || null, importedAt: c.importedAt }))
+  return [...CREDS.entries()].map(([name, c]) => ({
+    name, type: c.type, target: c.target || null, importedAt: c.importedAt,
+    source: c.source || 'director-put', generation: c.generation ?? null,
+  }))
 }
 
 // The runtime audit (AD-1): everything that happened ON this box, time-ordered —
-// Director activations + event-signing enactments — so History is the runtime's
-// honest record, not a blank enactment-only log. Distinct from Nvoy's grant
-// Ledger (the credential-lifecycle view). Standing credential grants ride
-// separately in /api/state.entitlements (they're state, not timestamped events).
+// Director activations, event-signing enactments, and grant observations (a
+// credential loaded/updated/dropped from a Director-signed grant; an entitlement
+// derived or lost) — so History is the runtime's honest record. Distinct from
+// Nvoy's grant Ledger (the issuance-side credential-lifecycle view): History
+// records what the box OBSERVED, the Ledger records what the Director DID.
+// Standing (current) grants additionally ride in /api/state.entitlements —
+// that's state; these are the timestamped events.
 function runtimeAudit() {
   const out = []
   for (const [name, a] of Object.entries(config.activations || {})) {
@@ -449,6 +477,7 @@ function runtimeAudit() {
   for (const h of (approval.listHistory() || [])) {
     out.push({ t: 'enact', id: h.id, identity: h.identity, kindLabel: h.kindLabel, outcome: h.outcome, fingerprint: h.fingerprint, detail: h.detail, when: h.when })
   }
+  out.push(...GRANT_AUDIT)
   return out.sort((x, y) => (y.when || 0) - (x.when || 0))
 }
 
@@ -459,7 +488,7 @@ function runtimeAudit() {
 function derivedCommsChannels(existing) {
   const have = new Set((existing || []).map(c => c.credential).filter(Boolean))
   const out = []
-  for (const id of ID_ENTITIES) {
+  for (const id of idEntities()) {
     for (const cred of (ENTITLEMENTS.get(id.pub) || [])) {
       if (have.has(cred) || !/^telegram-/.test(cred) || APPROVAL_CHANNEL_CREDS[cred]) continue
       have.add(cred)
@@ -487,7 +516,7 @@ const server = createServer(async (req, res) => {
       // holds a live grant for). Names only, never values. Lets a Director verify
       // the sovereign grants are readable on-box before flipping enforcement.
       enforceOwnership: ENFORCE_OWNERSHIP,
-      entitlements: Object.fromEntries(ID_ENTITIES
+      entitlements: Object.fromEntries(idEntities()
         .map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
     })
   }
@@ -617,7 +646,7 @@ const server = createServer(async (req, res) => {
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
         history: runtimeAudit(),
-        entitlements: Object.fromEntries(ID_ENTITIES.map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
+        entitlements: Object.fromEntries(idEntities().map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
       })
     }
     if (path === '/api/propose' && req.method === 'POST') {
@@ -670,7 +699,7 @@ const server = createServer(async (req, res) => {
         IMPORTED.set(name, { nsec: secret, importedAt: Date.now() })
         if (extra.handle) { config.identitiesMeta[name] = { ...(config.identitiesMeta[name] || {}), handle: extra.handle, signer: 'custodial', status: 'active' }; saveConfig(config) }
       }
-      CREDS.set(name, { type, target: body.target || null, importedAt: Date.now(), value: secret })
+      CREDS.set(name, { type, target: body.target || null, importedAt: Date.now(), value: secret, source: 'director-put' })
       return json(res, 200, { ok: true, imported: name, type, credentials: credentialsView(), identities: await identitiesView() })
     }
 
@@ -704,14 +733,17 @@ server.listen(PORT, () => {
   // restarts (re-read, no cache); a Director's scope-key rotation drops the
   // credential on the next sweep. Grant-sourced creds override bootstrap-env
   // ones of the same name — the migration path is: grant it, verify, drop the
-  // env line. See docs/migration-status-2026-07.md.
-  startGrantReader({ relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, log: console.log })
-  // A1/A2 — read each on-box identity's OWN grants (with its own key) to build the
-  // grant-derived entitlement map the broker gates on. Boot + every 5 min, so a
-  // Director's new grant / revocation flows through. Enforcement is separate
-  // (NACT_ENFORCE_CREDENTIAL_OWNERSHIP) — this reader just builds the map.
-  console.log(`  ownership enforcement: ${ENFORCE_OWNERSHIP ? 'ON' : 'off (blanket trust)'} · identities: ${ID_ENTITIES.map(i => i.name).join(', ') || '(none)'}`)
-  startEntitlementReader({ relayUrls: RELAYS, identities: ID_ENTITIES, entitlements: ENTITLEMENTS, log: console.log })
+  // env line. See docs/migration-status-2026-07.md. Only grants PUBLISHED BY a
+  // Director are honored (directorPubs, read live so config edits apply), and
+  // every load/update/drop lands in the runtime audit (AD-1).
+  startGrantReader({ relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
+  // A1/A2 — read each runtime identity's OWN grants (with its own key) to build
+  // the grant-derived entitlement map the broker gates on. Boot + every 5 min, so
+  // a Director's new grant / revocation flows through; identities imported at
+  // runtime are swept too (idEntities is re-evaluated each sweep). Enforcement is
+  // separate (NACT_ENFORCE_CREDENTIAL_OWNERSHIP) — this reader just builds the map.
+  console.log(`  ownership enforcement: ${ENFORCE_OWNERSHIP ? 'ON' : 'off (blanket trust)'} · identities: ${idEntities().map(i => i.name).join(', ') || '(none)'}`)
+  startEntitlementReader({ relayUrls: RELAYS, identities: idEntities, entitlements: ENTITLEMENTS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
   // AD-2 — advertise this runtime's endpoint + relay list under its OWN key, so
   // clients address it by identity (nactor@nave.pub) instead of a hard-coded URL.
   // Replaceable events: moving the box just republishes. Non-fatal.
