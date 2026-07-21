@@ -143,6 +143,19 @@ scope's key and published value (no secret re-entered), so the Director's own
 Grant Index is the only place the plaintext ever is. The prior grantee (the Nave
 Nactor) keeps its grant until A2 consumer wiring is proven, then it is revoked.
 
+**A2 stage 2 — SHIPPED (2026-07-21).** The runtime side of "the identity lends
+the capability" is live in the reader: the entitlement sweep now also loads the
+VALUE from each owner's own grant into RAM (`source: grant-owner`, owner
+recorded), with strict precedence — **owner grant > Nactor-addressed grant >
+bootstrap-env/put** — and graceful fallback (an owner revocation drops the
+owner-sourced entry; a surviving Nactor-addressed copy restores supply on the
+next sweep, so cutover is per-credential and reversible). Owner loads/drops are
+owner-tagged in the runtime audit (AD-1). What this unblocks: once an owner
+grant is verified serving a credential (audit shows the owner-tagged load), the
+Director revokes the Nactor-addressed duplicate in the console — one scope at a
+time, `credential:google` first (it was issued owner-first on 2026-07-21 and
+already flows Luke→runtime).
+
 ## How a new app plugs in (e.g. `warm.contact`)
 
 An app that wants an IMAP app-password (or any secret) on this box does **not**
