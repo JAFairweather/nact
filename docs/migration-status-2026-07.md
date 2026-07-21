@@ -41,7 +41,7 @@ Per [`architecture.md`](architecture.md) — grant → receive → act:
 | 0 · inventory | classify env via `migrate-env.mjs` | **STALE** — predates tonight's four new secrets; re-run needed |
 | 1 · grantee + activations | Nactor nsec/npub; Director activates role identities | **DONE** — luke, nave, brain activated; bootstrap Director anchored |
 | 2a · consumption (broker) | consumers reach providers only through Nactor | **LIVE and carrying real traffic** — see table below |
-| 2b · delivery (grants) | credentials arrive as Director-signed scopes, env keys retired | **BUILT, NEVER USED** — every credential still arrives bootstrap-env; zero grants issued; zero env keys retired |
+| 2b · delivery (grants) | credentials arrive as Director-signed scopes, env keys retired | **READER LIVE (M2, 2026-07-21)** — Nactor reads credential-scopes from the relays on boot + timer; still **zero grants issued, zero env keys retired** — that's M3+, per-credential |
 | 3 · whole-box | every service brokered; env → bootstrap stub | not started |
 | v2/v3 · agent residency | role keys to enclave/NIP-46; agent protocol-resident | design only |
 
@@ -120,12 +120,37 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
 
 - **M1 · Re-inventory — DONE (2026-07-18).** `migrate-env.mjs` classifies all 25
   live keys with zero unknowns; the agent-era secrets are now in its rules.
-- **M2 · Nactor credential-scope reader (the real delivery).** Give Nactor the
-  NIP-DA read path: vendor `nipxx.mjs`; on boot + a timer, `receiveGrants` for
-  Nactor's npub, `fetchScope` each `credential:*` scope, load into `CREDS`.
-  Drop on rotation/expiry. Self-contained (Nactor already holds its nsec); no
-  dependency on Nvoy's MCP for V1. Unit-tested against an in-memory relay before
-  any deploy.
+- **M2 · Nactor credential-scope reader (the real delivery) — DONE (2026-07-21,
+  nact#1).** The NIP-DA read path, live on boot + a 5-minute timer
+  (`nactor/grant-reader.mjs`, offline-tested against the in-memory relay;
+  self-contained — no dependency on Nvoy's MCP for V1). What shipped, beyond the
+  original recipe:
+  - **Two readers, per credential-sovereignty.md.** `syncCredentialGrants` reads
+    *Nactor's own* grants and loads values into `CREDS` (the broker's supply);
+    `syncIdentityEntitlements` reads *each runtime identity's* grants with that
+    identity's key and derives the entitlement map the broker gates on
+    (enforcement stays off by default). Identities imported at runtime are swept
+    without a restart. The A2 end state — credential *ciphertext* re-addressed to
+    the owning identity — is decided per-credential from M3 on.
+  - **Director-only trust.** A grant is honored only if its publisher is in the
+    live Director set — a spoofed scope gift-wrapped to Nactor's npub by anyone
+    else is counted and ignored, never loaded.
+  - **Revocation semantics, tested.** Scope-key rotation drops the credential on
+    the next sweep; revoking an identity's *last* grant clears its entitlement
+    (a successful read of zero grants is authoritative); a transient relay
+    failure never strips anything — asymmetric by design.
+  - **Env fallback flagged.** The set of credentials still bootstrap-env-sourced
+    is logged at boot and on change, and `/api/state.credentials[].source` shows
+    per-credential provenance (`grant` / `bootstrap-env` / `director-put`) —
+    names only, never values. The honest measure of migration remaining.
+  - **Runtime audit (AD-1).** Every observation transition — grant-load /
+    grant-update / grant-drop, entitlement-gain / entitlement-loss — lands as a
+    timestamped event in `/api/state.history` and the Nact History tab. The
+    issuance-side lifecycle stays in Nvoy's Ledger.
+  - **Tolerant payload keys.** `.value` is canonical (what Nvoy's console
+    issues); `.secret`/`.key`/`.api_key`/bare-string are honored on read so one
+    issuance feeds every reader (warm.contact's Swift reader accepts
+    `key`/`api_key`/`value`).
 - **M3 · Issue the pilot from Nvoy: `telegram-luke`.** From `nvoy.nave.pub`,
   create a credential-scope carrying the token, grant it to Nactor's npub.
   Verify Nactor picks it up and the morning brief still sends. **Then delete the

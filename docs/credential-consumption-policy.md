@@ -69,6 +69,36 @@ Note the mode is per **(credential × consumer)**, not per credential: the *same
 grant-to-app for warm.contact (off-box, private content). The tests decide, every
 time.
 
+## Who may broker: the entitlement gate (A1/A2, shipped with M2)
+
+The two tests decide *where the key sits*. A second, orthogonal question is *who
+may ask the broker to use it* — and the answer is the same substance as
+everything else here: **a Director-signed grant, verified on-box, never a
+box-local ACL.**
+
+- Nactor derives an **entitlement map** by reading each runtime identity's own
+  `credential:*` grants with that identity's key (`nactor/grant-reader.mjs`,
+  boot + timer). Holding a live, decryptable, Director-published grant for a
+  credential *is* the entitlement; revocation is the same scope-key rotation as
+  everywhere else and flows through on the next sweep.
+- Only grants **published by a Director** count — for the entitlement map and
+  for the CREDS delivery path both. Anyone can gift-wrap a scope to a runtime
+  npub; only the Director's are honored.
+- **Enforcement is graduated and off by default**
+  (`NACT_ENFORCE_CREDENTIAL_OWNERSHIP`): when on, a credential is gated only
+  once *some* identity holds a grant for it — so an unmigrated credential stays
+  on blanket trust and nothing breaks mid-cutover.
+- Scope names are **namespaced strings** (AD-8: `profile:* · credential:* ·
+  data:* · capability:*`), not enums. This reader consumes `credential:*` only;
+  other namespaces pass through inert. The decrypt core
+  (`receiveGrants`/`latestGrants`/`fetchScope`) is namespace-agnostic, so a
+  future `capability:*` resolver (the Scoped-Action-Approvals management layer,
+  warm.contact's interim local policy object) rides the same path.
+- Provenance is visible, values never are: the env-fallback set is flagged in
+  logs at boot and on change, `/api/state.credentials[].source` says
+  `grant`/`bootstrap-env`/`director-put` per credential, and every grant or
+  entitlement transition lands in the runtime audit (AD-1).
+
 ## Consequences to design for
 
 - **Grant-to-app = more copies at rest.** Mitigate on the *credential*, not the
