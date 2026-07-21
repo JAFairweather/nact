@@ -67,9 +67,23 @@ for (const [k, v] of Object.entries(process.env)) {
 // this npub (NIP-44); Nactor decrypts with this nsec. Bootstrap it on the box
 // (SOPS-sealed) via NACTOR_NSEC. Without it, Nactor can't receive credentials —
 // it still runs on the env fallback, but credential import is disabled.
+//
+// M7 (nact#6): under NACT_GRANT_TRANSPORT=mcp the nsec moves to the nvoy-mcp
+// service (as its NVOY_NSEC) and this env loses the key ENTIRELY. Nactor then
+// keeps only its PUBLIC identity via NACTOR_NPUB (public — /api/health prints
+// it anyway), so the broker/connector gates and the grantee-address display
+// keep working while credential READS ride the MCP client and the V1 HTTP
+// credential fallback (which needs the sk to decrypt) reports itself disabled.
 const NACTOR_SK = loadSecret(process.env.NACTOR_NSEC || '')
-const NACTOR_PUB = NACTOR_SK ? getPublicKey(NACTOR_SK) : null
+const NACTOR_PUB = NACTOR_SK ? getPublicKey(NACTOR_SK) : toPub(process.env.NACTOR_NPUB || '')
 const NACTOR_NPUB = NACTOR_PUB ? nip19.npubEncode(NACTOR_PUB) : null
+
+// M7 transport switch: 'relay' (default — the direct NIP-DA reader, V1) or
+// 'mcp' (read grants through nvoy-mcp over the private network; zero nostr
+// knowledge on this side). Relay stays the default until the box cutover
+// proves mcp; the cutover script flips this env and is fully reversible.
+const GRANT_TRANSPORT = /^mcp$/i.test(process.env.NACT_GRANT_TRANSPORT || '') ? 'mcp' : 'relay'
+const MCP_URL = (process.env.NACT_MCP_URL || '').trim()
 
 // In-memory credential store: name → { type, target, importedAt, value }.
 // value is NEVER serialized out of the process — not to a file, not over the
@@ -721,6 +735,10 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { ok: true, revoked: name, credentials: credentialsView() })
       }
       if (!NACTOR_NPUB) return json(res, 503, { error: 'NACTOR_NSEC not configured — credential import disabled' })
+      // mcp transport: the sk lives with nvoy-mcp, so this runtime cannot
+      // decrypt a Director's NIP-44 ciphertext. The V1 HTTP fallback is
+      // honestly disabled — issue the credential from Nvoy instead.
+      if (!NACTOR_SK) return json(res, 503, { error: 'this runtime holds no NACTOR_NSEC (grant transport: mcp) — the HTTP credential fallback is disabled; issue a scope from Nvoy granted to ' + NACTOR_NPUB })
       if (!body.enc) return json(res, 400, { error: 'enc (NIP-44 ciphertext to the Nactor npub) required' })
       let plaintext
       try { plaintext = decryptScope(body.enc, pubkey) } catch (e) { return json(res, 400, { error: 'decrypt failed: ' + (e?.message || 'bad ciphertext') }) }
@@ -762,7 +780,7 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, () => {
-  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length} · nactor key: ${NACTOR_NPUB ? NACTOR_NPUB.slice(0, 16) + '…' : 'MISSING (credential import disabled)'}`)
+  console.log(`nactor on :${PORT} — identities: ${Object.keys(IDS).join(', ') || '(none)'} · directors: ${directorPubs().size || 'NONE'}${BOOTSTRAP ? ' (bootstrap set)' : ''} · relays: ${RELAYS.length} · grant transport: ${GRANT_TRANSPORT} · nactor key: ${NACTOR_SK ? NACTOR_NPUB.slice(0, 16) + '…' : NACTOR_NPUB ? `${NACTOR_NPUB.slice(0, 16)}… (public only — nsec with nvoy-mcp)` : 'MISSING (credential import disabled)'}`)
   // The DELIVERY half: read credential-scopes granted to this npub from the
   // relays (boot + every 5 min) and load them into CREDS. Durable across
   // restarts (re-read, no cache); a Director's scope-key rotation drops the
@@ -771,7 +789,11 @@ server.listen(PORT, () => {
   // env line. See docs/migration-status-2026-07.md. Only grants PUBLISHED BY a
   // Director are honored (directorPubs, read live so config edits apply), and
   // every load/update/drop lands in the runtime audit (AD-1).
-  startGrantReader({ relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
+  // M7: NACT_GRANT_TRANSPORT=mcp reads the SAME grants through the nvoy-mcp
+  // service (NACT_MCP_URL) — which then custodies the nactor nsec — with
+  // identical CREDS semantics and the same Director-publisher filter applied
+  // via the grants' author fields. Default remains relay until cutover proves.
+  startGrantReader({ transport: GRANT_TRANSPORT, mcpUrl: MCP_URL, relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
   // A1/A2 — read each runtime identity's OWN grants (with its own key) to build
   // the grant-derived entitlement map the broker gates on. Boot + every 5 min, so
   // a Director's new grant / revocation flows through; identities imported at
@@ -791,6 +813,7 @@ server.listen(PORT, () => {
     endpoint: process.env.NACT_ADDRESS || 'https://nact.nave.pub/api',
     now: Math.floor(Date.now() / 1000), log: console.log,
   }).catch(e => console.log(`  endpoint-advert: ${e?.message || e}`))
+  else if (NACTOR_NPUB) console.log('  endpoint-advert: skipped — this runtime holds no nactor nsec (mcp transport); the last published advert stays authoritative (replaceable event)')
 })
 
 export { server, nact, config }
