@@ -36,6 +36,7 @@ import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
+import { runMailVerb } from './connectors/mail.mjs'
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -630,6 +631,40 @@ const server = createServer(async (req, res) => {
       const text = await upstream.text().catch(() => '')
       res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' })
       return res.end(text)
+    }
+
+    // Mail connector — the first stateful-adapter connector (docs/connectors.md;
+    // nact#4). Same gate as the broker: a Director or an ACTIVATED identity, and
+    // (under enforcement) a Director grant for the `mail-<account>` credential.
+    // Nactor resolves that credential from RAM — host/user/auth all come from it,
+    // never from the request — and runs ONE read-only IMAP verb (list / search /
+    // headers / body; write verbs don't exist in the adapter). The caller gets
+    // shaped rows, never the password, the token, or raw IMAP.
+    if (path === '/api/connector/mail' && req.method === 'POST') {
+      if (!NACTOR_NPUB) return json(res, 503, { error: 'NACTOR_NSEC not configured — connectors disabled' })
+      if (!isDirector(pubkey) && !activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not a Director or an activated identity' })
+      const account = String(body.account || '').trim()
+      if (!/^[a-z0-9][a-z0-9-]*$/i.test(account)) return json(res, 400, { error: 'account required — the <account> of a mail-<account> credential' })
+      const credName = `mail-${account}`
+      // Same graduated ownership gate as /api/broker (see the comment there):
+      // enforced only when ON and once SOME identity holds a grant for it.
+      if (ENFORCE_OWNERSHIP && !isDirector(pubkey)) {
+        const graduated = [...ENTITLEMENTS.values()].some(set => holdsCredential(set, credName))
+        if (graduated && !holdsCredential(ENTITLEMENTS.get(pubkey), credName)) {
+          return json(res, 403, { error: `caller not entitled to credential '${credName}' — no Director grant names this identity` })
+        }
+      }
+      const cred = CREDS.get(credName)
+      if (!cred) return json(res, 503, { error: `credential '${credName}' not imported` })
+      try {
+        const out = await runMailVerb(body, cred.value, { credName, resolveCredential: n => CREDS.get(n)?.value ?? null })
+        // account + verb + mailbox + counts ONLY — never addresses, subjects, or bodies.
+        const count = out.messages?.length ?? out.mailboxes?.length ?? (out.text != null ? 1 : 0)
+        console.log(`  connector-mail: ${account} ${body.verb} ${out.mailbox || '—'} → ${count} row(s)`)
+        return json(res, 200, out)
+      } catch (e) {
+        return json(res, Number.isInteger(e?.status) ? e.status : 502, { error: e?.message || 'mail connector error' })
+      }
     }
 
     if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
