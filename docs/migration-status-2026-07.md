@@ -196,16 +196,33 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
   `google:default` profile, serving the PRIMARY model — see M6.
 - **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy; the Gmail app password
   becomes a credential-scope + RAM-only; `mail/app-passwd` deleted.
-- **M6 · Engine egress.** Engine model calls → `/api/proxy` (dummy-token); the
-  engine-held keys move behind Nactor. Two credentials, discovered 2026-07-21
-  to be the engine's own custody today: `ANTHROPIC_API_KEY` in openclaw.env,
-  and — the bigger half — the **google/Gemini key serving the PRIMARY engine
-  model** (`google/gemini-3.1-pro-preview`), stored in the gateway's
-  `google:default` provider profile (E-tier; the agent never holds the raw
-  key — reasonable custody, but not yet a revocable grant). The proxy already
-  has a `google` provider (`/api/proxy/google` → generativelanguage); M6 =
-  issue both as credential-scopes, point the gateway's provider profiles at
-  the dummy-token proxy, drop both engine-held keys.
+- **M6 · Engine egress — DONE (2026-07-21, nact#5).** Both engine-held keys
+  are retired: every model call (the PRIMARY included) rides the dummy
+  `NACT_PROXY_TOKEN` to `/api/proxy/<provider>`, where Nactor injects the
+  grant-sourced key from RAM. The `google` credential was issued to **Luke**
+  (the owner) and re-granted to Nactor (the broker's supply) — the first
+  credential born owner-first. Verified by the organic gate: a live primary
+  model call in the engine's own transport log, routed via
+  `nactor:8791/api/proxy/google/v1beta/…`, streaming 200.
+  The working mechanism (three engine quirks cost three rolled-back attempts —
+  each caught by the scripts' self-verification, Luke never down):
+  - **auth profiles stay; the STORE value becomes the dummy.** Builtin
+    provider ids resolve auth from the profile/SecretRef store — a config
+    `apiKey` does not win, and deleting the profile breaks resolution. The
+    swap is the engine's own CLI (`models auth paste-api-key
+    --profile-id <p>:default`), stdin-piped, never logged.
+  - **routing is a provider-entry `baseUrl`** — plus `api:
+    "google-generative-ai"` pinned for google (the plugin-supplied provider
+    is shadowed by any config entry, whose default dialect is
+    openai-completions), and the base carries `/v1beta` (under a custom base
+    the engine appends only `/models/…`).
+  - **recovery asymmetry, by design:** the real keys' only homes are the Nvoy
+    grants + Nactor RAM. Routing auto-restores on failed verification; the
+    store swap does not — recovery is re-run-fixed or a Director re-paste
+    from Bitwarden. This is the acceptance criterion, not a gap.
+  Scripts: `nave.pub deploy/ops/{proxy-token-mint,oc-egress-anthropic,
+  oc-egress-google}.sh`. Box-local `*.bak-egress-*` backups are removable
+  after a quiet week. Remaining engine-side keys: none.
 - **M7 · Nvoy MCP transport (the fuller target).** Nvoy's MCP holds Nactor's
   nsec and serves config + credential scopes as MCP tools; Nactor reads with
   "zero nostr knowledge." Completes Phase 2b→3, opens v2 (enclave role keys).
