@@ -246,57 +246,20 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
   Scripts: `nave.pub deploy/ops/{proxy-token-mint,oc-egress-anthropic,
   oc-egress-google}.sh`. Box-local `*.bak-egress-*` backups are removable
   after a quiet week. Remaining engine-side keys: none.
-- **M7 · Nvoy MCP transport (the fuller target) — BUILT + OFFLINE-TESTED
-  (2026-07-21, nact#6); box cutover is the remaining step.** The nvoy-mcp
-  service custodies Nactor's nsec (as its `NVOY_NSEC`) and serves the
-  credential scopes as MCP tools; Nactor reads with **zero nostr knowledge**
-  through `nactor/mcp-grant-client.mjs` — a minimal MCP-over-streamable-HTTP
-  JSON-RPC client (initialize + tools/call, ~200 lines, no SDK dependency)
-  speaking the same two conformance-pinned tools warm.contact consumes:
-  `nvoy_grants_list` + `nvoy_scope_read` (payload under `.data`, `max_age: 0`
-  = live, errors carry `code`; `nvoy/test/mcp-conformance.mjs` stays the wire
-  authority). What shipped:
-  - **A transport switch, not a replacement.** `NACT_GRANT_TRANSPORT=mcp`
-    routes the Nactor-grant sweep through `syncCredentialGrantsMcp`
-    (`grant-reader.mjs`) — list grants → filter `credential:*` → live-read
-    each → **identical CREDS semantics** (source `'grant'`,
-    takeover/update/drop audit events, bootstrap-env + director-put isolation,
-    A2 owner-precedence, env-fallback flag, the box-greppable
-    `credential-grants: loaded […]` log line). Default stays `relay` (the V1
-    direct reader, byte-for-byte untouched) until the cutover proves mcp —
-    rollback is unsetting the flag.
-  - **Director-only trust survives the transport.** `nvoy_grants_list`
-    exposes each grant's `author_npub`, so the same live Director set filters
-    grants here (npub→hex against `directorPubs`); a spoofed grant from a
-    non-Director is counted and ignored, exactly as on the relay path. The
-    MCP server's own key custody is a second boundary, not the only one.
-  - **SCOPE CUT (Director-approved).** The per-identity sweeps — entitlements
-    + A2 owner-value supply — **stay direct-relay in both modes**: moving
-    them means moving the role keys out of Nactor, which is v2 enclave work.
-  - **Key custody in mcp mode.** Nactor's env loses `NACTOR_NSEC` entirely
-    and keeps only public `NACTOR_NPUB` (broker/connector gates + grantee
-    display keep working); the V1 HTTP fallback `PUT /api/credential` reports
-    itself honestly disabled (it needs the sk to decrypt), and the AD-2
-    endpoint advert stops republishing (the last replaceable event stays
-    authoritative; rollback or a Director-side publish restores it).
-  - **Auth boundary, documented.** The nvoy-mcp server exposes no token gate
-    (verified against `nvoy/mcp/src` — nothing in the HTTP listener
-    authenticates), so the boundary is **network isolation**: expose-only on
-    the private `nave` compose network, never published, no Caddy route.
-  - **Offline-verified** (`nactor/mcp-grant-client.test.mjs`): spins the REAL
-    built nvoy server from the sibling repo against a seeded local ws relay —
-    the conformance suite's own pattern — and drives client + reader end to
-    end: load, live update, revocation-by-rotation → drop, Director filter,
-    A2 precedence, service-outage asymmetry (sweep throws, nothing dropped),
-    session re-init across an nvoy-mcp restart, and the
-    `startGrantReader(transport: mcp)` boot wiring.
-  - **Not yet done (the cutover):** the `nvoy-mcp` compose service +
-    env generation + the reviewed, reversible custody-move script live in
-    nave.pub (`deploy/docker-compose.yml`, `deploy/sites.sh`,
-    `deploy/ops/m7-cutover.sh`) — preflight npub-match → flip
-    `NACT_GRANT_TRANSPORT=mcp` + strip `NACTOR_NSEC` from Nactor's env →
-    recreate → verify the mcp sweep serves → self-restore on failure.
-    Completes Phase 2b→3 when dispatched; opens v2 (enclave role keys).
+- **M7 · Nvoy MCP transport — CUTOVER COMPLETE (2026-07-21, nact#6).** The
+  final milestone is live: `nvoy-mcp` (the conformance-proven server, a
+  compose service on the private network) custodies the nactor key; the
+  runtime's env holds **no nsec** and reads its credential grants through the
+  two conformance-pinned MCP tools with zero nostr knowledge
+  (`credential-grants: transport mcp → http://nvoy-mcp:8799/mcp`). Verified on
+  cutover (ops 29871169714): env clean, all 8 credentials loaded via MCP,
+  grantee npub unchanged, health green. The direct-relay reader remains as
+  the flagged fallback (`NACT_GRANT_TRANSPORT=relay`) and the per-identity
+  sweeps (entitlements + A2 owner-value supply) stay direct-relay by design —
+  moving role keys is v2. Rollback: restore the env backups from the cutover
+  stamp, flip the flag, recreate. **Phase 2b→3 of this migration is closed:
+  every provider credential is grant-delivered, RAM-only, revocable from the
+  console, and the runtime that uses credentials cannot receive them.**
 
 Each milestone ends with: *verify consumer works → delete the env copy → note it
 here.* No milestone leaves two live sources of truth, and no milestone reaches
