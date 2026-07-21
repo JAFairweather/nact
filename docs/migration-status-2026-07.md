@@ -65,10 +65,16 @@ consumers · **E** = engine SecretRef store.
 > and the env copies for `TELEGRAM_LUKE_BOT_TOKEN` and `GOOGLE_OAUTH_*` are
 > already deleted. Still bootstrap-env on the box: `ANTHROPIC_API_KEY` and
 > approvals `TELEGRAM_BOT_TOKEN` (both now redundant fallbacks — grant-sourced
-> values override them; delete on verify). `GEMINI_API_KEY` is gone from the
-> env with no `google` grant issued — the `google` broker credential currently
-> exists nowhere; re-grant it or retire the provider entry. Rows below are as
-> written 2026-07-17 — read them with this correction.
+> values override them; delete on verify). `GEMINI_API_KEY` left the Nactor
+> env with no `google` grant — but the credential is NOT gone: **Gemini is the
+> PRIMARY engine model** (`google/gemini-3.1-pro-preview`) and its key lives at
+> **E-tier, in the OpenClaw gateway's own config under the `google:default`
+> provider profile** — the gateway attaches it to model calls; the agent never
+> holds the raw key. So Nactor's `google` broker/proxy path is currently
+> unused, and the google key joins `ANTHROPIC_API_KEY`-in-`openclaw.env` as an
+> **M6 concern** (engine egress) — now the more important half of M6, since it
+> carries the primary engine. Rows below are as written 2026-07-17 — read them
+> with this correction.
 
 | credential | class | today | brokered use | target | gap |
 | --- | --- | --- | --- | --- | --- |
@@ -182,13 +188,24 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
   Outstanding: delete `ANTHROPIC_API_KEY` and `TELEGRAM_BOT_TOKEN` from the
   box env after verify — the latter completes the approvals-bot flip to
   `@navenactorbot` (the granted `telegram-nactjaf` re-issue carries the new
-  token; the env line still holds the old bot's), so verify approvals arrive
-  from the new bot before deleting. Note: `GEMINI_API_KEY` left the env with
-  no `google` grant issued — decide re-grant vs retire the provider.
+  token; the env line still holds the old bot's; Director confirmed the old
+  channel retired 2026-07-21). The reviewed deletion path is
+  `nave.pub deploy/ops/retire-brokered-env.sh` (preflight-gated on the grants
+  actually serving; self-restoring on failed verify). `GEMINI_API_KEY` is not
+  an M4 item: the google key lives at E-tier in the engine gateway's
+  `google:default` profile, serving the PRIMARY model — see M6.
 - **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy; the Gmail app password
   becomes a credential-scope + RAM-only; `mail/app-passwd` deleted.
-- **M6 · Engine egress.** Engine model calls → `/api/proxy` (dummy-token); drop
-  `ANTHROPIC_API_KEY` from openclaw.env.
+- **M6 · Engine egress.** Engine model calls → `/api/proxy` (dummy-token); the
+  engine-held keys move behind Nactor. Two credentials, discovered 2026-07-21
+  to be the engine's own custody today: `ANTHROPIC_API_KEY` in openclaw.env,
+  and — the bigger half — the **google/Gemini key serving the PRIMARY engine
+  model** (`google/gemini-3.1-pro-preview`), stored in the gateway's
+  `google:default` provider profile (E-tier; the agent never holds the raw
+  key — reasonable custody, but not yet a revocable grant). The proxy already
+  has a `google` provider (`/api/proxy/google` → generativelanguage); M6 =
+  issue both as credential-scopes, point the gateway's provider profiles at
+  the dummy-token proxy, drop both engine-held keys.
 - **M7 · Nvoy MCP transport (the fuller target).** Nvoy's MCP holds Nactor's
   nsec and serves config + credential scopes as MCP tools; Nactor reads with
   "zero nostr knowledge." Completes Phase 2b→3, opens v2 (enclave role keys).
