@@ -87,6 +87,11 @@ export async function syncCredentialGrants({ relay, relayUrls, nactorSk, creds, 
             : s.data?.value ?? s.data?.secret ?? s.data?.key ?? s.data?.api_key ?? null
           if (value == null) { summary.errors.push(`${name}: scope carried no value`); continue }
           const prior = creds.get(name)
+          // A2 precedence: an OWNER-sourced value (the identity's own grant,
+          // lent to this runtime) outranks the Nactor-addressed copy — never
+          // clobber it here. If the owner grant is revoked, its entry drops and
+          // this path restores supply on the next sweep (graceful fallback).
+          if (prior && prior.source === 'grant-owner') { summary.loaded.push(name); continue }
           const takeover = !prior || prior.source !== 'grant'   // new, or env/put → grant
           const changed = !takeover && (prior.value !== value || prior.generation !== s.generation)
           creds.set(name, {
@@ -173,10 +178,11 @@ export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers
 //   • one scope FETCH threw (network blip on a single scope) → that credential
 //     keeps its prior membership. A real revocation is not a throw: it comes
 //     back cleanly as 'stale'/'missing' and is simply not counted.
-export async function syncIdentityEntitlements({ relay, relayUrls, identities, entitlements, allowedPublishers, log = () => {}, onEvent = () => {} }) {
+export async function syncIdentityEntitlements({ relay, relayUrls, identities, entitlements, creds, allowedPublishers, log = () => {}, onEvent = () => {} }) {
   const own = relay || new LiveRelay(relayUrls)
   const owned = !relay
   const summary = {}
+  const ownerLoaded = []
   const ids = typeof identities === 'function' ? identities() : identities
   try {
     const trusted = publisherSet(allowedPublishers)
@@ -189,10 +195,47 @@ export async function syncIdentityEntitlements({ relay, relayUrls, identities, e
           .filter(g => (g.scopeName || '').startsWith(CREDENTIAL_PREFIX))
         if (trusted) grants = grants.filter(g => trusted.has(g.publisher))
         readOk = true
+        grants.sort((a, b) => (a.issuedAt || 0) - (b.issuedAt || 0))   // newest re-issue wins the value
         for (const g of grants) {
           const name = g.scopeName.slice(CREDENTIAL_PREFIX.length)
           if (!name) continue
-          try { const s = await fetchScope(own, g); if (s.status === 'ok') held.add(name) }
+          try {
+            const s = await fetchScope(own, g)
+            if (s.status === 'ok') {
+              held.add(name)
+              // A2 stage 2 — the OWNER's grant supplies the VALUE. The identity
+              // holds the grant; the co-resident runtime (which custodies the
+              // identity's key) loads it into RAM as a capability the identity
+              // LENDS it — outranking any Nactor-addressed copy, which becomes
+              // revocable. Same tolerant payload keys as the delivery reader.
+              if (creds) {
+                const value = typeof s.data === 'string' ? s.data
+                  : s.data?.value ?? s.data?.secret ?? s.data?.key ?? s.data?.api_key ?? null
+                if (value != null) {
+                  const prev = creds.get(name)
+                  const takeover = !prev || prev.source !== 'grant-owner'
+                  const changed = !takeover && (prev.value !== value || prev.generation !== s.generation || prev.owner !== id.name)
+                  creds.set(name, {
+                    type: 'secret', target: CREDENTIAL_PREFIX + name, value,
+                    source: 'grant-owner', owner: id.name,
+                    importedAt: Date.now(), generation: s.generation,
+                  })
+                  ownerLoaded.push(`${name}←${id.name}`)
+                  if (takeover) onEvent({ t: 'grant-load', credential: name, owner: id.name, generation: s.generation, when: Date.now() })
+                  else if (changed) onEvent({ t: 'grant-update', credential: name, owner: id.name, generation: s.generation, when: Date.now() })
+                }
+              }
+            } else if (creds) {
+              // Owner grant revoked/rotated: drop ONLY an entry this path set —
+              // the Nactor-addressed reader (if a legacy copy still exists)
+              // restores plain 'grant' supply on its next sweep.
+              const cur = creds.get(name)
+              if (cur && cur.source === 'grant-owner' && cur.owner === id.name) {
+                creds.delete(name)
+                onEvent({ t: 'grant-drop', credential: name, owner: id.name, when: Date.now() })
+              }
+            }
+          }
           catch { if (prior.has(name)) held.add(name) }   // transient scope blip: sticky
         }
       } catch { /* relay read failed → next = prior (below) */ }
@@ -207,14 +250,16 @@ export async function syncIdentityEntitlements({ relay, relayUrls, identities, e
   }
   const line = Object.entries(summary).map(([n, cs]) => `${n}:[${cs.join(',') || '—'}]`).join(' ')
   if (line) log(`  entitlements: ${line}`)
+  if (ownerLoaded.length) summary['creds-from-owner'] = ownerLoaded
   return summary
 }
 
-// Boot sweep + periodic re-sweep for the entitlement map. Returns stop().
-export function startEntitlementReader({ relayUrls, identities, entitlements, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {} }) {
+// Boot sweep + periodic re-sweep for the entitlement map (and, when `creds` is
+// passed, the A2 owner-grant value supply). Returns stop().
+export function startEntitlementReader({ relayUrls, identities, entitlements, creds, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {} }) {
   const idsProvided = typeof identities === 'function' || identities?.length
   if (!idsProvided || !relayUrls?.length) { log('  entitlements: reader disabled (no identities / relays)'); return { stop() {} } }
-  const sweep = () => syncIdentityEntitlements({ relayUrls, identities, entitlements, allowedPublishers, log, onEvent })
+  const sweep = () => syncIdentityEntitlements({ relayUrls, identities, entitlements, creds, allowedPublishers, log, onEvent })
     .catch(e => log(`  entitlements: sweep error ${e?.message || e}`))
   sweep()
   const t = setInterval(sweep, intervalMs)

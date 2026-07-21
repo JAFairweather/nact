@@ -193,6 +193,52 @@ e = await syncIdentityEntitlements({ relay, identities: ids, entitlements: entit
 assert.deepEqual(e.luke, [], 'non-Director grant yields no entitlement')
 console.log('✓ non-Director publisher cannot mint entitlements');
 
+// ---------------------------------------------------------------------------
+// A2 stage 2 — the OWNER's grant supplies the VALUE (the identity lends the
+// capability to the co-resident runtime); Nactor-addressed copies become
+// revocable fallback.
+
+// 10) Owner value load: grant a credential to luke, sweep with `creds` passed.
+const a2creds = new Map()
+const a2ents = new Map()
+const a2Events = []
+let oScopeId = 'own-gg', oGen = 1, oKey = newScopeKey()
+await publishScope(relay, dir, { scopeId: oScopeId, generation: oGen, scopeKey: oKey, payload: { value: 'owner-google-key' } })
+await grant(relay, dir, lukePub, { scopeId: oScopeId, generation: oGen, scopeKey: oKey, scopeName: 'credential:google' })
+let a2 = await syncIdentityEntitlements({ relay, identities: ids, entitlements: a2ents, creds: a2creds, allowedPublishers: DIRECTORS, onEvent: ev => a2Events.push(ev) })
+assert.equal(a2creds.get('google')?.value, 'owner-google-key', 'owner grant supplied the value')
+assert.equal(a2creds.get('google')?.source, 'grant-owner', 'tagged grant-owner')
+assert.equal(a2creds.get('google')?.owner, 'luke', 'owner recorded')
+assert.ok(a2Events.some(e => e.t === 'grant-load' && e.owner === 'luke' && e.credential === 'google'), 'owner-tagged grant-load audit event')
+console.log('✓ A2: owner grant supplies the value into CREDS (grant-owner, owner recorded)');
+
+// 10b) Steady-state owner re-sweep: no new audit events.
+const evCount = a2Events.length
+await syncIdentityEntitlements({ relay, identities: ids, entitlements: a2ents, creds: a2creds, allowedPublishers: DIRECTORS, onEvent: ev => a2Events.push(ev) })
+assert.equal(a2Events.length, evCount, 'unchanged owner re-sweep is audit-silent')
+console.log('✓ A2: steady-state owner re-sweep is audit-silent');
+
+// 11) Precedence: a NACTOR-addressed copy of the same name must NOT clobber the
+// owner-sourced value.
+const nScopeId = 'nact-gg', nKey = newScopeKey()
+await publishScope(relay, dir, { scopeId: nScopeId, generation: 1, scopeKey: nKey, payload: { value: 'nactor-copy-key' } })
+await grant(relay, dir, nactorPub, { scopeId: nScopeId, generation: 1, scopeKey: nKey, scopeName: 'credential:google' })
+s = await syncCredentialGrants({ relay, nactorSk: nactor, creds: a2creds, allowedPublishers: DIRECTORS })
+assert.equal(a2creds.get('google').value, 'owner-google-key', 'owner value outranks the Nactor-addressed copy')
+assert.equal(a2creds.get('google').source, 'grant-owner', 'source stays grant-owner')
+console.log('✓ A2: precedence — grant-owner outranks the Nactor-addressed grant');
+
+// 12) Owner revocation → graceful fallback to the Nactor-addressed copy.
+await rotateScope(relay, dir, { scopeId: oScopeId, generation: oGen, payload: { value: 'owner-google-key' }, scopeName: 'credential:google', survivors: [] })
+await syncIdentityEntitlements({ relay, identities: ids, entitlements: a2ents, creds: a2creds, allowedPublishers: DIRECTORS, onEvent: ev => a2Events.push(ev) })
+assert.equal(a2creds.has('google'), false, 'owner revocation drops the grant-owner entry')
+assert.ok(a2Events.some(e => e.t === 'grant-drop' && e.owner === 'luke'), 'owner-tagged grant-drop audit event')
+s = await syncCredentialGrants({ relay, nactorSk: nactor, creds: a2creds, allowedPublishers: DIRECTORS })
+assert.equal(a2creds.get('google')?.value, 'nactor-copy-key', 'Nactor-addressed copy restores supply on the next sweep')
+assert.equal(a2creds.get('google')?.source, 'grant', 'fallback tagged plain grant')
+console.log('✓ A2: owner revocation falls back to the Nactor-addressed copy (no gap)');
+
 console.log('\nGRANT-READER TESTS PASS — issue, read, live-update, revoke-drop, isolation,')
-console.log('Director-only trust, env-fallback flag, audit events, and entitlement')
-console.log('derivation/revocation/failure semantics all verified')
+console.log('Director-only trust, env-fallback flag, audit events, entitlement')
+console.log('derivation/revocation/failure semantics, and A2 owner-value supply +')
+console.log('precedence + fallback all verified')

@@ -743,7 +743,11 @@ server.listen(PORT, () => {
   // runtime are swept too (idEntities is re-evaluated each sweep). Enforcement is
   // separate (NACT_ENFORCE_CREDENTIAL_OWNERSHIP) — this reader just builds the map.
   console.log(`  ownership enforcement: ${ENFORCE_OWNERSHIP ? 'ON' : 'off (blanket trust)'} · identities: ${idEntities().map(i => i.name).join(', ') || '(none)'}`)
-  startEntitlementReader({ relayUrls: RELAYS, identities: idEntities, entitlements: ENTITLEMENTS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
+  // A2 stage 2: the entitlement sweep also SUPPLIES VALUES from each owner's
+  // own grants (creds passed) — the identity lends the capability to this
+  // co-resident runtime; owner-sourced values outrank the Nactor-addressed
+  // copies, which become revocable per-credential from the console.
+  startEntitlementReader({ relayUrls: RELAYS, identities: idEntities, entitlements: ENTITLEMENTS, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
   // AD-2 — advertise this runtime's endpoint + relay list under its OWN key, so
   // clients address it by identity (nactor@nave.pub) instead of a hard-coded URL.
   // Replaceable events: moving the box just republishes. Non-fatal.
