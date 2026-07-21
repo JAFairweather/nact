@@ -223,20 +223,39 @@ try {
   assert.equal(eventTs(), 'grant-load grant-update grant-drop', 'no new audit events post-revocation')
   console.log('✓ reader (mcp): post-revocation status (revoked-detected) handled without re-drop')
 
+  // 4c) SUPERSEDE PATTERN (the 2026-07-21 mail-gmail incident): a REVOKED
+  // scope and a LIVE re-issue share one credential name. The severed sibling
+  // must never clobber what the live one loads — in either processing order.
+  const supKeyA = newScopeKey(), supKeyB = newScopeKey()
+  await publishScope(seedRelay, dir, { scopeId: 'sup-a', generation: 1, scopeKey: supKeyA, payload: { value: 'old-bad-value' } })
+  await grant(seedRelay, dir, nactorPub, { scopeId: 'sup-a', generation: 1, scopeKey: supKeyA, scopeName: 'credential:mail-gmail' })
+  await rotateScope(seedRelay, dir, { scopeId: 'sup-a', generation: 1, payload: { value: 'old-bad-value' }, scopeName: 'credential:mail-gmail', survivors: [] })
+  await publishScope(seedRelay, dir, { scopeId: 'sup-b', generation: 1, scopeKey: supKeyB, payload: { value: 'new-good-value' } })
+  await grant(seedRelay, dir, nactorPub, { scopeId: 'sup-b', generation: 1, scopeKey: supKeyB, scopeName: 'credential:mail-gmail' })
+  // the server seeds its wrap inbox at boot — restart it so the mid-session
+  // grants are visible (the client re-initializes transparently)
+  await stopChild(child); ({ child } = await spawnServer(serverEnv, port))
+  s = await syncCredentialGrantsMcp({ client, creds, allowedPublishers: DIRECTORS, onEvent })
+  assert.equal(creds.get('mail-gmail')?.value, 'new-good-value', 'live re-issue survives its revoked sibling')
+  assert.ok(!s.dropped.includes('mail-gmail'), 'severed sibling did not clobber the live credential')
+  s = await syncCredentialGrantsMcp({ client, creds, allowedPublishers: DIRECTORS, onEvent })
+  assert.equal(creds.get('mail-gmail')?.value, 'new-good-value', 'stable across sweeps (no load/drop flapping)')
+  console.log('✓ reader (mcp): revoked+re-issued same-name scopes — live sibling always wins, no flapping')
+
   // 5) ASYMMETRY: the whole service going away must never strip a credential.
   await stopChild(child); child = null
   await assert.rejects(syncCredentialGrantsMcp({ client, creds, allowedPublishers: DIRECTORS, onEvent }),
     'a dead nvoy-mcp makes the sweep THROW (logged as sweep error), not drop')
   assert.equal(creds.get('google').value, 'owner-google-key', 'creds intact through the outage')
-  assert.equal(creds.size, 3, 'nothing dropped by the outage')
-  assert.equal(eventTs(), 'grant-load grant-update grant-drop', 'no audit events from the outage')
+  assert.equal(creds.size, 4, 'nothing dropped by the outage')
+  assert.equal(eventTs(), 'grant-load grant-update grant-drop grant-load', 'no audit events from the outage')
   console.log('✓ reader (mcp): service outage throws the sweep — nothing dropped (asymmetric by design)')
 
   // 6) RESTART: same port, new process, new sessions. The SAME client instance
   // must transparently re-initialize (its old mcp-session-id is dead).
   ;({ child } = await spawnServer(serverEnv, port))
   const grants2 = await client.listGrants()
-  assert.equal(grants2.length, 5, 'stale session re-initialized across the server restart')
+  assert.equal(grants2.length, 7, 'stale session re-initialized across the server restart')
   console.log('✓ client: dead session re-initializes across an nvoy-mcp restart (sweeps survive redeploys)')
 
   // 7) startGrantReader wiring — transport 'mcp' boot sweep, no nactor key
