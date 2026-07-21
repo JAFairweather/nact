@@ -25,8 +25,9 @@ Per [`architecture.md`](architecture.md) — grant → receive → act:
   bootstrap keys: the `age` key and `NACTOR_NSEC`.
 - **Consumption.** Consumers never hold provider credentials. Our code brokers
   through `/api/broker` (NIP-98 as an activated identity); third-party engines
-  use the dummy-token egress proxy; protocol clients (IMAP) will use verb-scoped
-  protocol adapters ([`imap-adapter.md`](imap-adapter.md)).
+  use the dummy-token egress proxy; non-HTTP protocols (IMAP) ride verb-scoped
+  connectors ([`connectors.md`](connectors.md), superseding the raw-proxy shape
+  in [`imap-adapter.md`](imap-adapter.md)).
 - **Transports.** V1 delivery = `PUT /api/credential` (NIP-98 Director-signed,
   NIP-44 ciphertext — **built, unused**). Target delivery = scopes served over
   Nvoy's MCP, same as config. The HTTP path remains a local fallback.
@@ -194,8 +195,30 @@ env copy remains.** RAM is the runtime home; the *relays* are the durable home.
   actually serving; self-restoring on failed verify). `GEMINI_API_KEY` is not
   an M4 item: the google key lives at E-tier in the engine gateway's
   `google:default` profile, serving the PRIMARY model — see M6.
-- **M5 · Nmail adapter (#36).** Verb-scoped IMAP proxy; the Gmail app password
-  becomes a credential-scope + RAM-only; `mail/app-passwd` deleted.
+- **M5 · Mail connector (nact#4; the docs' #36) — BUILT + OFFLINE-TESTED
+  (2026-07-21); box cutover is the remaining step.** Shipped per
+  [`connectors.md`](connectors.md) — `POST /api/connector/mail`, a verb-scoped
+  **read-only** stateful adapter (`nactor/connectors/mail.mjs`, imapflow), not
+  the raw byte-pipe of the first sketch. The verb surface is `list` / `search`
+  / `headers` / `body` and nothing else exists in the code: mailboxes open
+  with EXAMINE (never SELECT), bodies fetch as BODY.PEEK (never sets `\Seen`),
+  and APPEND/STORE/EXPUNGE/DELETE/MOVE/COPY/CREATE/RENAME are structurally
+  absent. Auth is selected by the `mail-<account>` credential's **value**
+  (app-password → IMAP LOGIN; oauth → XOAUTH2 with a token minted by
+  `oauth.mjs`, naming an existing bundle like `gworkspace` or riding inline;
+  re-mint once on auth failure). Same gate as `/api/broker`: NIP-98 +
+  Director-or-activated-identity, graduated ownership enforcement on
+  `mail-<account>`; host/port/user/TLS come from the credential, never the
+  request; responses are shaped rows (envelope summaries, capped text/plain
+  preview) — the caller never sees the password, a token, or raw IMAP.
+  Offline-verified (`nactor/mail-connector.test.mjs`, in-process fake IMAP
+  server): both auth paths, all four verbs, the 15s timeout guard, NIP-44
+  credential delivery through `PUT /api/credential`, and a wire audit
+  asserting zero write verbs / EXAMINE-only / PEEK-only across every session.
+  **Not yet done (the cutover, still nact#4):** issue `mail-<account>` from
+  Nvoy granted to Nactor, point the inbox-summary consumer (Luke's beat) at
+  the connector, then delete `mail/app-passwd` + `luke-mail.env` from the box
+  — standing rule 2's violation closes only when the disk file is gone.
 - **M6 · Engine egress — DONE (2026-07-21, nact#5).** Both engine-held keys
   are retired: every model call (the PRIMARY included) rides the dummy
   `NACT_PROXY_TOKEN` to `/api/proxy/<provider>`, where Nactor injects the
