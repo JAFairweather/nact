@@ -6,6 +6,14 @@
 // dereferences those grants WITH ITS OWN NSEC and loads the values into the
 // in-memory CREDS store — on boot and on a timer.
 //
+// TWO TRANSPORTS since M7 (nact#6): the direct-relay reader below (V1, the
+// default and the fallback) and an MCP twin (syncCredentialGrantsMcp) that
+// reads the same grants through the nvoy-mcp service — which then custodies
+// Nactor's nsec — via NACT_GRANT_TRANSPORT=mcp. Same CREDS semantics either
+// way. The per-identity entitlement/A2 sweeps further down stay DIRECT-RELAY
+// in both modes (Director-approved M7 scope cut: moving them means moving the
+// role keys out of this runtime, which is v2 enclave work).
+//
 // Durable by construction: a restart just re-reads from the relays; nothing is
 // cached on disk. Revocation is a scope-key rotation on the Director's side —
 // fetchScope then returns 'stale', and the credential is dropped here on the
@@ -33,8 +41,10 @@
 // through `onEvent` so the runtime audit (AD-1) can record what this box
 // observed. Steady-state re-reads emit nothing — the audit stays signal.
 
+import { nip19 } from 'nostr-tools'
 import { receiveGrants, latestGrants, fetchScope } from './lib/nipxx.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
+import { McpGrantClient, McpToolError } from './mcp-grant-client.mjs'
 
 export const CREDENTIAL_PREFIX = 'credential:'
 
@@ -127,11 +137,158 @@ export async function syncCredentialGrants({ relay, relayUrls, nactorSk, creds, 
   return summary
 }
 
+// ---------------------------------------------------------------------------
+// M7 — the MCP transport twin of syncCredentialGrants (nact#6).
+//
+// Same sweep, same CREDS semantics (source 'grant', takeover/update/drop
+// events, owner-precedence, bootstrap/put isolation, env-fallback flag) — but
+// the NIP-DA work happens in the nvoy-mcp service, which custodies Nactor's
+// nsec as its NVOY_NSEC. This side holds NO key and speaks only the two
+// conformance-pinned tools via McpGrantClient: list grants → filter
+// credential:* → nvoy_scope_read each with max_age:0 (live, never the
+// server's cache) → load values.
+//
+// Director-only trust survives the transport: nvoy_grants_list exposes each
+// grant's `author_npub`, so the same allowedPublishers set (hex pubkeys)
+// filters here — decode npub → hex and compare. A spoofed grant from a
+// non-Director publisher is counted and ignored, exactly as on the relay
+// path. (Defense in depth: the nvoy-mcp service reads grants wrapped to
+// Nactor's key either way, so its key custody is a second boundary — but the
+// publisher filter is what stops a *validly-addressed* spoof.)
+//
+// Known transport limits, deliberate and documented:
+//   • nvoy_grants_list carries no issuedAt, so when TWO live scopes share a
+//     credential NAME (a corrected re-issue left unrevoked), ordering is the
+//     server's list order rather than oldest→newest — the Director's practice
+//     of rotating the superseded scope makes this moot; a warning logs when
+//     it happens.
+//   • a grant the server reports 'expired' (terms) cannot be read through the
+//     MCP surface (soft expiry, NIP-DA §4), so its credential drops — the
+//     relay path ignores terms entirely. Stricter, and the server's contract.
+//   • NVOY_SCOPE_UNAVAILABLE ('missing' with no revocation notice) is
+//     ambiguous by the server's own definition (relay flake vs deletion), so
+//     it is treated as a transient error: logged, never a drop. A real
+//     revocation surfaces as NVOY_GRANT_REVOKED and drops.
+const SEVERED = new Set(['NVOY_GRANT_REVOKED', 'NVOY_GRANT_EXPIRED', 'NVOY_GRANT_RELINQUISHED'])
+const npubToHex = (npub) => {
+  const s = String(npub || '').trim()
+  if (/^[0-9a-f]{64}$/i.test(s)) return s.toLowerCase()
+  try { const { type, data } = nip19.decode(s); return type === 'npub' ? data : null } catch { return null }
+}
+
+export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers, log = () => {}, onEvent = () => {} }) {
+  const summary = { loaded: [], dropped: [], stale: [], errors: [], untrusted: 0, envFallback: [] }
+  const trusted = publisherSet(allowedPublishers)
+  // A whole-list failure (service down, session refused twice) THROWS out of
+  // here — the caller logs a sweep error and nothing is dropped, matching the
+  // relay path's receiveGrants failure mode: transport trouble never revokes.
+  let grants = (await client.listGrants())
+    .filter(g => (g.scope_name || '').startsWith(CREDENTIAL_PREFIX))
+  if (trusted) {
+    const before = grants.length
+    grants = grants.filter(g => { const hex = npubToHex(g.author_npub); return hex && trusted.has(hex) })
+    summary.untrusted = before - grants.length
+  }
+  const seen = new Map()  // credential name → scope id, for the same-name warning
+  for (const g of grants) {
+    const name = (g.scope_name || '').slice(CREDENTIAL_PREFIX.length)
+    if (!name) { summary.errors.push('empty credential name'); continue }
+    if (seen.has(name)) log(`  credential-grants: WARNING — two live scopes carry credential '${name}' (${seen.get(name)}, ${g.d}); no issuedAt on the MCP surface, last listed wins — rotate the superseded scope`)
+    seen.set(name, g.d)
+    // The server already knows a severed grant: revoked-detected /
+    // relinquished / expired never dereference, so treat the status like a
+    // failed fetch on the relay path — drop only what WE loaded from a grant.
+    if (g.status && g.status !== 'active') {
+      const cur = creds.get(name)
+      if (cur && cur.source === 'grant') {
+        creds.delete(name)
+        summary.dropped.push(name)
+        onEvent({ t: 'grant-drop', credential: name, when: Date.now() })
+      }
+      summary.stale.push(name)
+      continue
+    }
+    try {
+      const s = await client.readScope(g.d, g.author_npub, { maxAge: 0 })
+      const value = typeof s.data === 'string' ? s.data
+        : s.data?.value ?? s.data?.secret ?? s.data?.key ?? s.data?.api_key ?? null
+      if (value == null) { summary.errors.push(`${name}: scope carried no value`); continue }
+      const prior = creds.get(name)
+      // A2 precedence, same as the relay path: an OWNER-sourced value (the
+      // identity's own grant) outranks the Nactor-addressed copy.
+      if (prior && prior.source === 'grant-owner') { summary.loaded.push(name); continue }
+      const takeover = !prior || prior.source !== 'grant'
+      const changed = !takeover && (prior.value !== value || prior.generation !== s.v)
+      creds.set(name, {
+        type: 'secret', target: CREDENTIAL_PREFIX + name, value,
+        source: 'grant', importedAt: Date.now(), generation: s.v,
+      })
+      summary.loaded.push(name)
+      if (takeover) onEvent({ t: 'grant-load', credential: name, generation: s.v, when: Date.now() })
+      else if (changed) onEvent({ t: 'grant-update', credential: name, generation: s.v, when: Date.now() })
+    } catch (e) {
+      if (e instanceof McpToolError && SEVERED.has(e.code)) {
+        // Verified severance (rotation past the grant, terms expiry, or a
+        // relinquishment): the credential is gone. Only drop what we loaded.
+        const cur = creds.get(name)
+        if (cur && cur.source === 'grant') {
+          creds.delete(name)
+          summary.dropped.push(name)
+          onEvent({ t: 'grant-drop', credential: name, when: Date.now() })
+        }
+        summary.stale.push(name)
+      } else {
+        // NVOY_SCOPE_UNAVAILABLE, NVOY_NO_GRANT (list/read race), transport
+        // blips: transient — keep whatever we hold (asymmetric by design).
+        summary.errors.push(`${name}: ${e?.code || e?.message || e}`)
+      }
+    }
+  }
+  summary.envFallback = envFallbackNames(creds)
+  if (summary.loaded.length || summary.dropped.length || summary.errors.length || summary.untrusted) {
+    log(`  credential-grants: loaded [${summary.loaded.join(', ') || '—'}]`
+      + (summary.dropped.length ? ` · dropped [${summary.dropped.join(', ')}]` : '')
+      + (summary.untrusted ? ` · ignored ${summary.untrusted} grant(s) from non-Director publishers` : '')
+      + (summary.errors.length ? ` · errors: ${summary.errors.join('; ')}` : ''))
+  }
+  return summary
+}
+
 // Start the boot sweep + a periodic re-sweep. Returns a stop() handle.
 // The env-FALLBACK flag is logged here (boot + whenever the set changes): which
 // credentials are still bootstrap-env-sourced — the honest measure of how much
 // of the migration remains. Steady state logs nothing.
-export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {} }) {
+//
+// M7 transport switch: `transport: 'mcp'` reads through the nvoy-mcp service
+// (mcpUrl, or an injected mcpClient for tests) and needs NO nactor key — the
+// nsec lives with nvoy-mcp. Default stays 'relay' (the direct NIP-DA reader,
+// V1) until the box cutover proves the MCP path; the relay branch below is
+// byte-for-byte the pre-M7 behavior.
+export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {}, transport = 'relay', mcpUrl, mcpClient }) {
+  if (transport === 'mcp') {
+    if (!mcpClient && !mcpUrl) {
+      const env = envFallbackNames(creds || new Map())
+      log(`  credential-grants: reader disabled (transport mcp, no NACT_MCP_URL)${env.length ? ` — ENV FALLBACK in force for [${env.join(', ')}]` : ''}`)
+      return { stop() {} }
+    }
+    const client = mcpClient || new McpGrantClient({ url: mcpUrl })
+    log(`  credential-grants: transport mcp → ${client.url || mcpUrl} (nvoy-mcp custodies the nactor key; this runtime reads with zero nostr knowledge)`)
+    let lastFallback = null
+    const sweep = () => syncCredentialGrantsMcp({ client, creds, allowedPublishers, log, onEvent })
+      .then(s => {
+        const key = s.envFallback.join(',')
+        if (key === lastFallback) return
+        lastFallback = key
+        log(s.envFallback.length
+          ? `  credential-grants: ENV FALLBACK in force for [${s.envFallback.join(', ')}] — bootstrap-env values in use until each is granted + retired (docs/migration-status-2026-07.md §5)`
+          : '  credential-grants: env fallback clear — every credential is grant-sourced')
+      })
+      .catch(e => log(`  credential-grants: sweep error ${e?.message || e}`))
+    sweep()                                   // boot read
+    const t = setInterval(sweep, intervalMs)  // periodic re-read (durability + revocation pickup)
+    if (t.unref) t.unref()
+    return { stop() { clearInterval(t); client.close?.().catch?.(() => {}) } }
+  }
   if (!nactorSk || !relayUrls?.length) {
     const env = envFallbackNames(creds || new Map())
     log(`  credential-grants: reader disabled (no nactor key / relays)${env.length ? ` — ENV FALLBACK in force for [${env.join(', ')}]` : ''}`)
