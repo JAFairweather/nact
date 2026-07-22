@@ -25,7 +25,9 @@
   ],
   "license": "MIT",
   "scripts": {
-    "build:bunker": "esbuild ./nactor/bunker-entry.mjs --bundle --format=esm --platform=browser --target=es2020 --minify --outfile=assets/vendor/nostr-tools-bunker.mjs"
+    "build:bunker": "esbuild ./nactor/bunker-entry.mjs --bundle --format=esm --platform=browser --target=es2020 --minify --outfile=assets/vendor/nostr-tools-bunker.mjs",
+    "sync-connect": "{ echo \"// vendored from JAFairweather/luke @ $(git -C ../../luke rev-parse --short HEAD) — do not edit; npm run sync-connect\"; cat ../../luke/nave-connect.mjs; } > lib/nave-connect.mjs",
+    "sync-titlebar": "{ echo \"// vendored from JAFairweather/nave.pub components @ $(git -C ../nave.pub rev-parse --short HEAD) — do not edit; npm run sync-titlebar\"; cat ../nave.pub/components/nave-titlebar.mjs; } > lib/nave-titlebar.mjs"
   },
   "dependencies": {
     "imapflow": "^1.4.8",

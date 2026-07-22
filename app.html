@@ -130,23 +130,25 @@ td .tierbtn{cursor:pointer;background:none;border:1px solid currentColor;border-
 .req{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px;border-top:1px solid var(--line)}
 </style>
+<!-- Every nostr-tools specifier resolves to ONE local bundle, so the vendored
+     nave-connect runs unmodified with no CDN anywhere in the sign-in path.
+     (nvoy maps these at esm.sh; a control plane shouldn't depend on a CDN to
+     let you in.) Rebuild the bundle with `npm run build:bunker`. -->
+<script type="importmap">
+{
+  "imports": {
+    "nostr-tools": "./assets/vendor/nostr-tools-bunker.mjs",
+    "nostr-tools/pool": "./assets/vendor/nostr-tools-bunker.mjs",
+    "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs"
+  }
+}
+</script>
 </head>
 <body>
-<header><div class="wrap bar">
-  <svg class="seal" viewBox="0 0 100 100" aria-hidden="true">
-    <rect x="2" y="2" width="96" height="96" rx="20" fill="#0b0906" stroke="#c39a56" stroke-width="2"/>
-    <g fill="none" stroke="#c39a56" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
-      <rect x="24" y="50" width="52" height="30" rx="3"/><line x1="24" y1="62" x2="76" y2="62" stroke-width="2.6"/><line x1="24" y1="71" x2="76" y2="71" stroke-width="2.6"/></g>
-    <g transform="rotate(-15 26 45)"><rect x="24" y="35" width="52" height="12" rx="2.5" fill="none" stroke="#c39a56" stroke-width="4"/>
-      <clipPath id="b"><rect x="24" y="35" width="52" height="12" rx="2.5"/></clipPath>
-      <g clip-path="url(#b)" fill="#c39a56"><polygon points="21,47 31,47 43,35 33,35"/><polygon points="37,47 47,47 59,35 49,35"/><polygon points="53,47 63,47 75,35 65,35"/><polygon points="69,47 79,47 91,35 81,35"/></g></g>
-  </svg>
-  <div class="title">Nact <small>· control plane</small></div>
-  <div class="spacer"></div>
-  <span class="who" id="director"></span>
-  <button class="pill" id="connect" style="cursor:pointer">◉ Connect</button>
-  <span class="pill">V1</span>
-</div></header>
+<!-- The shared Nave titlebar (components/nave-titlebar.mjs), rendered by the
+     module script below. The seal SVG moves into it as a trusted literal; the
+     bespoke #director / #connect cluster this replaced is gone. -->
+<header id="titlebar"></header>
 
 <div class="wrap">
   <div class="demo" id="banner">Not connected — nothing is loaded. <b>Connect</b> as a Director to reach Nactor (the live Nact runtime) behind the NIP-98 gate: a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone). Your key never enters this page.</div>
@@ -282,7 +284,7 @@ function connectViaNostrConnect(){
     const ta=ov.querySelector('#nc-uri'), logEl=ov.querySelector('#nc-log');
     const log=m=>{ const t=new Date().toLocaleTimeString(); logEl.textContent+=`${t}  ${m}\n`; logEl.scrollTop=logEl.scrollHeight; try{console.log('[nact-nc]',m)}catch{} };
     ov.querySelector('#nc-copy').onclick=()=>{ta.select();try{navigator.clipboard.writeText(ta.value)}catch{};document.execCommand&&document.execCommand('copy');ov.querySelector('#nc-status').textContent='copied — paste it in nsec.app';};
-    window.__nact.connectNostrConnect((uri)=>{ ta.value=uri; }, log)
+    window.__nact.nostrConnect((uri)=>{ ta.value=uri; }, log)
       .then(conn=>finish(resolve,conn)).catch(e=>finish(reject,e));
   });
 }
@@ -303,7 +305,7 @@ function connectWithStatus(bunkerStr){
     const finish=(fn,v)=>{ if(settled)return; settled=true; clearTimeout(t); ov.remove(); fn(v); };
     const t=setTimeout(()=>finish(reject,new Error('No response from your signer after 60s.\n\n• Make sure nsec.app is open (in another tab) and signed in.\n• Try generating a fresh bunker:// in nsec.app and pasting the new one.\n• A VPN or content filter can block the signer relay — turn it off if you have one.')),60000);
     ov.querySelector('#cw-cancel').onclick=()=>finish(reject,new Error('cancelled'));
-    window.__nact.connectBunker(bunkerStr,(url)=>{
+    window.__nact.bunker(bunkerStr,(url)=>{
       if(!url) return;
       ov.querySelector('#cw-msg').innerHTML='Your signer wants you to <b>approve this connection</b> — open it here:';
       ov.querySelector('#cw-auth').innerHTML=`<a class="btn primary" href="${esc(url)}" target="_blank" rel="noopener" style="display:inline-block;text-decoration:none">Approve in your signer ↗</a>`;
@@ -314,27 +316,49 @@ async function goLive(){
   if(LIVE) return;
   const choice = await chooseSigner();
   if(!choice) return;
-  const btn=document.getElementById('connect');
+  if(!window.__nact || !window.__nact.ready){ alert('Sign-in module is still loading — reload and try again.'); return; }
   try{
     if(choice.kind==='nip07'){
       if(!window.nostr) throw new Error('No browser extension (window.nostr) found. Install Alby or nos2x and reload.');
-      btn.textContent='approve in extension…';
-      await window.nostr.getPublicKey();   // triggers the extension's permission prompt now, not on first sign
-      SIGNER = { signEvent:(e)=>window.nostr.signEvent(e) };
+      SIGNER = await window.__nact.extension();
     } else if(choice.kind==='nostrconnect'){
-      if(!window.__nact||!window.__nact.connectNostrConnect) throw new Error('remote-signer client is still loading — reload and try again');
-      btn.textContent='waiting for signer…';
-      SIGNER = await connectViaNostrConnect();        // shows the link + waits for nsec.app
+      SIGNER = await connectViaNostrConnect();       // overlay shows the link + diagnostics
     } else {
-      if(!window.__nact||!window.__nact.connectBunker) throw new Error('remote-signer client is still loading — reload and try again');
-      btn.textContent='approve in signer…';
-      SIGNER = await connectWithStatus(choice.str);   // shows status + approval link + times out
+      SIGNER = await connectWithStatus(choice.str);  // overlay shows status + approval link
     }
-    btn.textContent='connecting…';
-    await refresh(); LIVE=true;
-    const b=document.getElementById('banner'); b.innerHTML='<b>● LIVE</b> — connected to Nactor as a Director. Approve / Reject / routing changes are real.'; b.style.borderColor='var(--low)'; b.style.color='var(--low)';
-    btn.textContent='● LIVE';
-  }catch(e){ btn.textContent='◉ Connect'; SIGNER=null; alert('Connect failed: '+e.message+'\n\nIf using a remote signer, make sure you approved the connection there, and that the runtime is deployed.'); }
+    await goneLive();
+  }catch(e){
+    SIGNER=null; setSignedOut();
+    alert('Connect failed: '+e.message+'\n\nIf using a remote signer, make sure you approved the connection there, and that the runtime is deployed.');
+  }
+}
+
+// Shared tail for a fresh sign-in and a resumed session alike: load the real
+// state, flip the banner, and put the identity in the titlebar.
+async function goneLive(){
+  await refresh(); LIVE=true;
+  try{ window.__nact.remember(SIGNER); }catch{}
+  const b=document.getElementById('banner');
+  b.innerHTML='<b>\u25cf LIVE</b> — connected to Nactor as a Director. Approve / Reject / routing changes are real.';
+  b.style.borderColor='var(--low)'; b.style.color='var(--low)';
+  const npub = await window.__nact.npubOf(SIGNER);
+  window.__nact.titlebar.update('#titlebar', { npub, kind: SIGNER.kind, onSignIn: null, onRefresh: refresh, onLogout: signOut });
+  draw();
+}
+function setSignedOut(){
+  window.__nact.titlebar.update('#titlebar', { npub:null, kind:null, onSignIn: goLive, onRefresh:null, onLogout:null });
+}
+async function signOut(){
+  try{ await SIGNER?.close?.(); }catch{}
+  SIGNER=null; LIVE=false;
+  try{ window.__nact.forget(); }catch{}
+  // Drop everything the runtime gave us — signed out must look exactly like
+  // never-connected, not like a stale snapshot of someone's real queue.
+  S.director=null; S.directors=[]; S.identities=[]; S.channels=[]; S.queue=[]; S.history=[]; S.profiles={};
+  const b=document.getElementById('banner');
+  b.innerHTML='Not connected — nothing is loaded. <b>Connect</b> as a Director to reach Nactor (the live Nact runtime) behind the NIP-98 gate: a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone). Your key never enters this page.';
+  b.style.borderColor=''; b.style.color='';
+  setSignedOut(); draw();
 }
 
 const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
@@ -389,7 +413,6 @@ function proposalCard(p){
 }
 function draw(){
   renderTabs();
-  document.getElementById('director').textContent = S.director || 'not connected';
   const v=document.getElementById('view'); let h='';
   if(tab==='queue'){
     h = S.queue.length ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
@@ -637,88 +660,121 @@ async function decide(id,outcome){
   S.history.unshift({id:p.id,identity:p.identity,klabel:p.klabel,outcome,fp:p.fp.slice(0,4)+'…'+p.fp.slice(-2),when:'just now',relays:outcome==='enacted'?3:0});
   draw();
 }
-document.getElementById('connect').onclick=goLive;
+// Boot. Draw IMMEDIATELY so the page is never blank — if the sign-in module
+// fails to load, you still get a readable (signed-out) control plane with a
+// clear reason, rather than an empty document.
 draw();
-</script>
-<!-- NIP-46 remote-signer bridge (bundled nostr-tools: BunkerSigner + relay pool).
-     Lets a Director sign from a bunker:// (e.g. nsec.app on iPhone) when there's
-     no browser extension. Loaded as a module so the inline app can call it via
-     window.__nact.connectBunker at Connect time. The key stays in the signer. -->
-<script type="module">
-import { BunkerSigner, parseBunkerInput, createNostrConnectURI, SimplePool, generateSecretKey, getPublicKey, nip19, nip44, nip04 } from './assets/vendor/nostr-tools-bunker.mjs';
-const hex = u8 => [...u8].map(b=>b.toString(16).padStart(2,'0')).join('');
-const unhex = s => Uint8Array.from(s.match(/.{1,2}/g).map(b=>parseInt(b,16)));
-const NC_RELAYS = ['wss://relay.nsec.app','wss://relay.damus.io','wss://nos.lol','wss://relay.primal.net'];
-function clientKey(){ let saved=localStorage.getItem('nact.bunker.clientkey'); const sk=saved?unhex(saved):generateSecretKey(); if(!saved) localStorage.setItem('nact.bunker.clientkey',hex(sk)); return sk; }
-window.__nact = window.__nact || {};
-// nostrconnect:// — Nact generates the link, YOU paste it into nsec.app "Connect
-// app". We run our OWN lenient handshake instead of BunkerSigner.fromURI, which
-// only accepts result===secret + NIP-44 and hangs when a signer (e.g. nsec.app)
-// replies result:"ack" or NIP-04. We accept either, learn the signer's pubkey
-// from the ack, then build the signer with fromBunker (no re-connect needed).
-// `log` streams diagnostics to the UI so we can see exactly where it breaks.
-window.__nact.connectNostrConnect = async function(onUri, log){
-  log = log || (()=>{});
-  const sk = clientKey();
-  const clientPub = getPublicKey(sk);
-  const secret = hex(generateSecretKey());
-  const uri = createNostrConnectURI({ clientPubkey: clientPub, relays: NC_RELAYS, secret, perms:['sign_event:27235','get_public_key'], name:'Nact', url: location.origin });
-  try{ onUri && onUri(uri); }catch{}
-  log('client pubkey '+clientPub.slice(0,10)+'…  secret '+secret.slice(0,6)+'…');
-  const pool = new SimplePool();
-  let count=0;
-  const signerPubkey = await new Promise((resolve,reject)=>{
-    // Subscribe EXACTLY like nostr-tools' proven BunkerSigner.fromURI:
-    // { kinds:[24133], '#p':[clientPub], limit:0 }. NO `since` — an earlier
-    // version filtered `since: now-30`, but the ack's created_at is stamped by
-    // the SIGNER's clock; if this browser's clock ran even a little fast the
-    // relay dropped the ack server-side and we saw 0 events. `limit:0` means
-    // "no stored history, just stream new events" and is clock-skew-proof.
-    log('subscribing for the ack (kind 24133 → us)…');
-    const sub = pool.subscribe(NC_RELAYS, { kinds:[24133], '#p':[clientPub], limit:0 }, {
-      onevent: async (ev)=>{
-        count++;
-        let plain=null, enc='none';
-        try{ plain = nip44.decrypt(ev.content, nip44.getConversationKey(sk, ev.pubkey)); enc='nip44'; }
-        catch{ try{ plain = await nip04.decrypt(sk, ev.pubkey, ev.content); enc='nip04'; }catch{ log('event #'+count+' from '+ev.pubkey.slice(0,8)+'… — decrypt FAILED (both)'); return; } }
-        let resp; try{ resp = JSON.parse(plain); }catch{ log('event #'+count+' '+enc+' — not JSON'); return; }
-        log('event #'+count+' '+enc+' result='+JSON.stringify(resp.result)+(resp.error?' error='+resp.error:''));
-        if(resp && (resp.result===secret || resp.result==='ack' || (resp.result && !resp.error))){ try{sub.close()}catch{}; log('handshake OK — signer '+ev.pubkey.slice(0,10)+'…'); resolve(ev.pubkey); }
-      },
-    });
-    // Connectivity check only — informational, runs AFTER the real subscription
-    // is already live so it can't race it. A FAIL here is not fatal: nsec.app
-    // publishes the ack to every relay in the URI, so any one reaching it wins.
-    NC_RELAYS.forEach(async r=>{ try{ await pool.ensureRelay(r); log('relay reachable  '+r); }catch(e){ log('relay unreachable '+r+' — '+(e&&e.message||e)); } });
-    setTimeout(()=>{ try{sub.close()}catch{}; reject(new Error('no connect handshake from the signer ('+count+' events seen). If 0 events: check the diagnostics above — at least one relay must say "reachable", and nsec.app must show the app under Connected apps.')); }, 175000);
+function boot(){
+  window.__nact.titlebar.render('#titlebar', {
+    appName: 'Nact', tagline: 'control plane', sealSvg: window.__nact.titlebar.seal,
+    npub: null, onSignIn: goLive, signInLabel: '\u25c9 Connect',
   });
-  log('building signer, asking get_public_key…');
-  const bp = { pubkey: signerPubkey, relays: NC_RELAYS, secret };
-  const signer = BunkerSigner.fromBunker(sk, bp, { pool });
-  const pk = await Promise.race([ signer.getPublicKey(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('signer connected but did not answer get_public_key')),20000)) ]);
-  log('got pubkey '+pk.slice(0,10)+'… — connected.');
-  return { pubkey: pk, npub: nip19.npubEncode(pk), signEvent:(e)=>signer.signEvent(e), close:()=>signer.close() };
+  // A remembered session resumes in the background — a reload shouldn't cost
+  // you a re-pairing ceremony.
+  window.__nact.resume().then(async s=>{
+    if(!s) return;
+    SIGNER = s;
+    try{ await goneLive(); }
+    catch{ SIGNER=null; setSignedOut(); }   // stale pairing → signed-out, never half-live
+  }).catch(()=>{});
+}
+if(window.__nact && window.__nact.ready) boot();
+else {
+  window.addEventListener('nact:ready', boot, { once:true });
+  // If the module never arrives (blocked, bad MIME, syntax error), say so where
+  // the Connect button would have been, instead of leaving a dead header.
+  setTimeout(()=>{
+    if(window.__nact && window.__nact.ready) return;
+    const b=document.getElementById('banner');
+    if(b) b.innerHTML='<b>Sign-in module did not load.</b> The control plane is readable but cannot connect. Check the browser console, then reload.';
+    document.getElementById('titlebar').innerHTML='<div class="wrap bar"><div class="title">Nact <small>\u00b7 control plane</small></div></div>';
+  }, 6000);
+}
+</script>
+<!-- Sign-in bridge. The crypto is NOT implemented here any more: it comes from
+     the shared nave-connect module (canonical in the luke repo, vendored into
+     lib/). This file only adapts it to the app's non-module script and keeps
+     nact's own diagnostics overlays, which are worth keeping — they are the
+     difference between "no ack" and "no relay". -->
+<script type="module">
+import { nip07Signer, nip46Signer, nostrConnectSigner,
+         serializeSession, parseSession } from './lib/nave-connect.mjs';
+import { renderTitlebar, updateTitlebar } from './lib/nave-titlebar.mjs';
+import { SimplePool, nip19 } from './assets/vendor/nostr-tools-bunker.mjs';
+
+const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;height:100%">
+  <rect x="2" y="2" width="96" height="96" rx="20" fill="#0b0906" stroke="#c39a56" stroke-width="2"/>
+  <g fill="none" stroke="#c39a56" stroke-width="4" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="24" y="50" width="52" height="30" rx="3"/><line x1="24" y1="62" x2="76" y2="62" stroke-width="2.6"/><line x1="24" y1="71" x2="76" y2="71" stroke-width="2.6"/></g>
+  <g transform="rotate(-15 26 45)"><rect x="24" y="35" width="52" height="12" rx="2.5" fill="none" stroke="#c39a56" stroke-width="4"/>
+    <clipPath id="ntbseal"><rect x="24" y="35" width="52" height="12" rx="2.5"/></clipPath>
+    <g clip-path="url(#ntbseal)" fill="#c39a56"><polygon points="21,47 31,47 43,35 33,35"/><polygon points="37,47 47,47 59,35 49,35"/><polygon points="53,47 63,47 75,35 65,35"/><polygon points="69,47 79,47 91,35 81,35"/></g></g>
+</svg>`;
+
+const REMEMBER = 'nact.session';   // same `remember` slot shape the other apps use
+
+window.__nact = window.__nact || {};
+window.__nact.titlebar = { render: renderTitlebar, update: updateTitlebar, seal: SEAL };
+
+// The three sign-in methods, all returning nave-connect's uniform signer shape
+// ({ kind, getPublicKey, signEvent, … }) so the app never branches on method.
+window.__nact.extension = async function(){
+  const s = nip07Signer();
+  await s.getPublicKey();            // runs Alby's trust ceremony now, not on first sign
+  return s;
 };
-window.__nact.connectBunker = async function(bunkerStr, onauth){
-  const bp = await parseBunkerInput((bunkerStr||'').trim());
-  if(!bp) throw new Error('not a valid bunker:// string');
-  // Reuse a persisted ephemeral CLIENT key so you don't re-approve every visit.
-  // This is a throwaway key that only names this app to your signer — not your identity.
-  let saved = localStorage.getItem('nact.bunker.clientkey');
-  const sk = saved ? unhex(saved) : generateSecretKey();
-  if(!saved) localStorage.setItem('nact.bunker.clientkey', hex(sk));
-  const pool = new SimplePool();
-  const signer = BunkerSigner.fromBunker(sk, bp, { pool, onauth: (url)=>{ try{ onauth && onauth(url); }catch{} } });
-  await signer.connect();                       // prompts approval in the signer (nsec.app)
-  const pk = await signer.getPublicKey();
-  localStorage.setItem('nact.bunker.uri', bunkerStr.trim());
-  return { pubkey: pk, npub: nip19.npubEncode(pk), signEvent:(e)=>signer.signEvent(e), close:()=>signer.close() };
+window.__nact.nostrConnect = function(onUri, log){
+  return nostrConnectSigner({
+    appName: 'Nact', appUrl: location.origin,
+    perms: ['sign_event:27235','get_public_key'],
+    clientSecret: localStorage.getItem('nact.bunker.clientkey') || undefined,
+    onUri, onLog: log,
+  });
 };
+window.__nact.bunker = async function(bunkerStr, onauth){
+  const s = nip46Signer((bunkerStr||'').trim(), {
+    clientSecret: localStorage.getItem('nact.bunker.clientkey') || undefined,
+    onAuthUrl: onauth,
+  });
+  await s.getPublicKey();            // nip46Signer is lazy — force the connect here
+  localStorage.setItem('nact.bunker.uri', (bunkerStr||'').trim());
+  return s;
+};
+
+// Remember the session so a reload reconnects without re-pairing. A
+// nostrconnect pairing hands back a synthesized bunker:// for exactly this.
+window.__nact.remember = function(signer){
+  try{
+    if(signer.kind === 'nip07') localStorage.setItem(REMEMBER, serializeSession('nip07'));
+    else if(signer.bunkerUri || localStorage.getItem('nact.bunker.uri')){
+      localStorage.setItem(REMEMBER, serializeSession('nip46', {
+        uri: signer.bunkerUri || localStorage.getItem('nact.bunker.uri'),
+        clientSecretHex: signer.clientSecretHex,
+      }));
+    }
+    if(signer.clientSecretHex) localStorage.setItem('nact.bunker.clientkey', signer.clientSecretHex);
+  }catch{ /* private-mode storage — sign-in still works, it just won't persist */ }
+};
+window.__nact.forget = function(){ try{ localStorage.removeItem(REMEMBER); }catch{} };
+window.__nact.resume = async function(){
+  let sess = null;
+  try{ sess = parseSession(localStorage.getItem(REMEMBER)); }catch{ return null }
+  if(!sess) return null;
+  if(sess.kind === 'nip07'){ try{ return await window.__nact.extension() }catch{ return null } }
+  if(sess.kind === 'nip46'){
+    try{ const s = nip46Signer(sess.uri, { clientSecret: sess.clientSecret }); await s.getPublicKey(); return s }
+    catch{ return null }
+  }
+  return null;
+};
+window.__nact.npubOf = async function(signer){
+  try{ return nip19.npubEncode(await signer.getPublicKey()) }catch{ return null }
+};
+
 // Resolve kind-0 profiles for a set of npubs (Directors + agent identities), so
 // the control plane renders real avatars / names / nip05 instead of bare pubkeys
-// — the same identity resolution Nvoy does. Returns a map keyed by the input
-// npub string → parsed kind-0 content (newest wins). Best-effort: a slow or
-// unreachable relay never blocks the UI (raced against a timeout).
+// — the same identity resolution Nvoy does. Best-effort: a slow or unreachable
+// relay never blocks the UI (raced against a timeout).
 window.__nact.fetchProfiles = async function(npubs, ms=3000){
   const list=[...new Set((npubs||[]).filter(Boolean))];
   const hexToNpub={};
@@ -743,6 +799,7 @@ window.__nact.fetchProfiles = async function(npubs, ms=3000){
   return out;
 };
 window.__nact.ready = true;
+window.dispatchEvent(new Event('nact:ready'));
 </script>
 </body>
 </html>
