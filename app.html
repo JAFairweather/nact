@@ -130,16 +130,25 @@ td .tierbtn{cursor:pointer;background:none;border:1px solid currentColor;border-
 .req{font-family:var(--mono);font-size:11.5px;color:var(--faint)}
 footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px;border-top:1px solid var(--line)}
 </style>
-<!-- Every nostr-tools specifier resolves to ONE local bundle, so the vendored
-     nave-connect runs unmodified with no CDN anywhere in the sign-in path.
-     (nvoy maps these at esm.sh; a control plane shouldn't depend on a CDN to
-     let you in.) Rebuild the bundle with `npm run build:bunker`. -->
+<!-- Every specifier resolves to a LOCAL file, so the vendored nave-connect runs
+     unmodified with no CDN anywhere in the sign-in path. (nvoy maps these at
+     esm.sh; a control plane shouldn't need a CDN to let you in.) Rebuild the
+     bundle with `npm run build:bunker`.
+
+     BUMP ?v= WHENEVER app.html, lib/*.mjs OR the bundle CHANGES. These four
+     files must load as one unit: a page cached from before an upgrade paired
+     with fresh modules (or the reverse) fails at module resolution, which here
+     is the sign-in path. Cache-Control:no-cache makes NEW responses revalidate
+     but cannot reach an entry a browser already holds — only a changed URL
+     can. Bare specifiers keep the token in this one block. -->
 <script type="importmap">
 {
   "imports": {
-    "nostr-tools": "./assets/vendor/nostr-tools-bunker.mjs",
-    "nostr-tools/pool": "./assets/vendor/nostr-tools-bunker.mjs",
-    "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs"
+    "nostr-tools": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
+    "nostr-tools/pool": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
+    "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
+    "nave-connect": "./lib/nave-connect.mjs?v=2",
+    "nave-titlebar": "./lib/nave-titlebar.mjs?v=2"
   }
 }
 </script>
@@ -698,9 +707,9 @@ else {
      difference between "no ack" and "no relay". -->
 <script type="module">
 import { nip07Signer, nip46Signer, nostrConnectSigner,
-         serializeSession, parseSession } from './lib/nave-connect.mjs';
-import { renderTitlebar, updateTitlebar } from './lib/nave-titlebar.mjs';
-import { SimplePool, nip19 } from './assets/vendor/nostr-tools-bunker.mjs';
+         serializeSession, parseSession } from 'nave-connect';
+import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
+import { SimplePool, nip19 } from 'nostr-tools';
 
 const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;height:100%">
   <rect x="2" y="2" width="96" height="96" rx="20" fill="#0b0906" stroke="#c39a56" stroke-width="2"/>
