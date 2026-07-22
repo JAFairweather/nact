@@ -149,8 +149,7 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
 </div></header>
 
 <div class="wrap">
-  <div class="demo" id="banner">Prototype wired to <b>sample data</b> — clicking Approve / Reject / Revoke updates local state only.
-    <b>Connect</b> as a Director to talk to Nactor (the live Nact runtime) behind the NIP-98 gate — a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone).</div>
+  <div class="demo" id="banner">Not connected — nothing is loaded. <b>Connect</b> as a Director to reach Nactor (the live Nact runtime) behind the NIP-98 gate: a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone). Your key never enters this page.</div>
   <nav class="tabs" id="tabs"></nav>
   <section id="view"></section>
 </div>
@@ -159,23 +158,15 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
 <script>
 // ---- seed state (stand-in for the runtime's real data) -------------------
 const S = {
-  director: 'jaf@dequalsf.com',                 // the connected Director (this session)
+  director: null,                               // the connected Director — set on connect, never seeded
   // Directors — the human decision-maker(s) who approve or reject. Part of the
   // config, not the box's env. (Distinct from Noir's AI "Director".)
-  directors: [
-    { npub:'npub1gqg2csuzqmwpqqvts99786spefkf90xz96t3n6zp6fqnk2r74pxs4tcgrg', label:'jaf@dequalsf.com', bootstrap:true, verified:true },
-  ],
+  directors: [],
   // The Nactor this config targets — the runtime that applies it. Can be this
   // box or a remote one; the app just points at its address.
   nactorAddress: 'https://nact.nave.pub/api',
-  identities: [
-    { key:'luke', handle:'luke@nave.pub', npub:'npub1lyuqym67ztczd7xunupjednja9r05xmrrgvhmsrwvdw5duq5vedq44kfxv', signer:'custodial', status:'active' },
-    { key:'nave', handle:'nave@nave.pub', npub:'npub1mr09rp9qjmjfk0mewvp93szl3la4dn038rqgk0rmpvrgtg8mjclqk5002v', signer:'custodial', status:'active' },
-  ],
-  channels: [
-    { id:'tg', name:'Nave approvals', kind:'Telegram bot', approver:'jaf (472339615)', covers:['luke','nave'], status:'active' },
-    { id:'dm', name:'Nostr DM', kind:'NIP-59 gift-wrap', approver:'npub1gqg…74pxs', covers:['luke','nave'], status:'active' },
-  ],
+  identities: [],
+  channels: [],
   // risk tiers (defaults mirror src/inspect.mjs)
   policy: [
     { kind:1, label:'Note', tier:'low' },
@@ -187,23 +178,13 @@ const S = {
     { kind:5, label:'Deletion request', tier:'critical' },
     { kind:10002, label:'Relay list', tier:'critical' },
   ],
-  queue: [
-    { id:'NwE7', identity:'luke', kind:1, klabel:'Note', tier:'low',
-      content:'shipped the WYSIWYS hardening today — the approval card now shows the exact bytes it will sign, with a fingerprint you can check against your signer.',
-      tags:[], ctx:'ecosystem shipping — Phase 1 landed', fp:'a3f19c4e77b02d81', warns:[] },
-    { id:'k92X', identity:'nave', kind:1, klabel:'Note', tier:'low',
-      content:"Nact's control plane is live in V1 — construct approval channels, set risk tiers, and revoke an agent's authority to act. The agent proposes; you enact it by signing.",
-      tags:[['t','nostrdev']], ctx:'launch note for the app', fp:'be5502aa1c9f3d40', warns:[] },
-    { id:'Qz3m', identity:'nave', kind:0, klabel:'Profile / metadata edit', tier:'critical',
-      content:'{"name":"Nave","about":"The Nave​ — sovereign data on nostr","picture":"https://nave.pub/assets/avatars/nave.png"}',
-      tags:[], ctx:'refresh the bio', fp:'1f77d0be93ac2201',
-      warns:['Profile / metadata edit — high-impact, verify carefully','1 hidden / bidi control character in content'] },
-  ],
-  history: [
-    { id:'m8Ha', identity:'nave', klabel:'Note', outcome:'enacted', fp:'7c0a…f2', when:'today 20:18', relays:3 },
-    { id:'p1Ld', identity:'luke', klabel:'Reaction', outcome:'enacted', fp:'44c8…9a', when:'today 17:02', relays:3 },
-    { id:'x0Qe', identity:'luke', klabel:'Note', outcome:'rejected', fp:'22b1…03', when:'yesterday 08:41', relays:0 },
-  ],
+  // Queue and history stay EMPTY until the runtime fills them. This app used to
+  // ship fabricated pending approvals and enactment history as seed data, which
+  // rendered identically to the real thing — an approval queue that invents
+  // approvals is the one thing a control plane must never do. Disconnected now
+  // means empty, and every tab says so.
+  queue: [],
+  history: [],
 };
 let tab = 'queue';
 let LIVE = false;
@@ -408,11 +389,11 @@ function proposalCard(p){
 }
 function draw(){
   renderTabs();
-  document.getElementById('director').textContent = S.director;
+  document.getElementById('director').textContent = S.director || 'not connected';
   const v=document.getElementById('view'); let h='';
   if(tab==='queue'){
     h = S.queue.length ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
-      : `<div class="empty">Nothing awaiting approval. The agent will propose when it has something worth posting.</div>`;
+      : `<div class="empty">${LIVE?'Nothing awaiting approval. The agent will propose when it has something worth posting.':'Not connected — <b>Connect</b> as a Director to load your queue.'}</div>`;
   }
   if(tab==='identities'){
     h=`<div class="muted" style="margin:0 0 14px">The nostr identities your agent may <b>act as</b> — each signs the events it proposes. Custodial keys live on the box (SOPS-encrypted); NIP-46 identities keep their key on your device. Wire them to approval channels in <b>Routing</b>.</div><div class="grid">${S.identities.map(i=>{
@@ -534,7 +515,7 @@ function draw(){
     const appr=approvalChannels(), comms=commsChannels();
     const noComms=S.identities.filter(i=>!commsChannelFor(i.key)).map(i=>i.handle);
     h=`<div class="sect2" style="margin-top:0">🛡 Approval channels <span class="muted" style="font-weight:400">— shared; where any agent's proposals go to be gated</span></div>
-      <div class="grid">${appr.map(chCard).join('')||'<div class="empty">No approval channels.</div>'}</div>
+      <div class="grid">${appr.map(chCard).join('')||`<div class="empty">${LIVE?'No approval channels.':'Not connected — <b>Connect</b> as a Director to load your channels.'}</div>`}</div>
       <div class="sect2" style="margin-top:20px">💬 Communications channels <span class="muted" style="font-weight:400">— each agent's own line for normal (non-approval) messaging</span></div>
       <div class="grid">${comms.map(chCard).join('')||''}</div>
       ${noComms.length?`<div class="hint" style="margin-top:8px">No comms channel yet for <b>${noComms.map(esc).join(', ')}</b> — each needs its own telegram bot (its own update consumer, like Luke's). Provision a bot, grant it to that agent, and it appears here.</div>`:''}
@@ -591,7 +572,7 @@ function draw(){
           <div><h3 style="font-size:15px">${esc(e.klabel)} · ${esc(idOf(e.identity).handle)}</h3>
           <div class="kv">id ${esc(e.fp)} · ${esc(e.when)}${e.outcome==='enacted'?` · ${e.relays} relays`:''}</div></div></div>
         <span class="badge ${e.outcome==='enacted'?'b-ok':'b-rej'}">${esc(e.outcome)}</span></div></div>`}).join('')}</div>`
-        : `<div class="empty">No activations, enactments, or grant events recorded yet on this runtime.</div>`}`;
+        : `<div class="empty">${LIVE?'No activations, enactments, or grant events recorded yet on this runtime.':'Not connected — <b>Connect</b> as a Director to load history.'}</div>`}`;
   }
   v.innerHTML=h;
   // wire actions
