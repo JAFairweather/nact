@@ -449,7 +449,7 @@ function draw(){
       return `<div class="card"><div class="row between">
       <div class="row">${avatarHTML(profileOf(i.npub), i.handle)}<div>
         <h3>${esc(dispName(profileOf(i.npub), i.handle))}</h3>
-        <div class="muted"><span style="color:var(--accent-bright)">${esc(i.handle)}</span> · signs via <b>${i.signer==='custodial'?'custodial key (SOPS-encrypted)':'NIP-46 bunker'}</b></div></div></div>
+        <div class="muted"><span style="color:var(--accent-bright)">${esc(i.handle)}</span> · signs via <b>${i.signer==='custodial'?'custodial key (SOPS-encrypted)':i.signer==='director'?'the Director, in his own hand (Ngage — no key on the box)':'NIP-46 bunker'}</b></div></div></div>
       <span class="badge ${i.status==='active'?'b-ok':'b-off'}">${i.status}</span></div>
       <div class="kv" style="margin:12px 0 2px">${esc(i.npub)}</div>
       ${i.activated
@@ -463,7 +463,7 @@ function draw(){
       <div class="chips">${(()=>{const cc=commsChannelFor(i.key);return cc
         ? `<span class="chip ${cc.status==='active'?'on':''}">💬 ${esc(cc.name)} · ${esc(chanShort(cc))}${cc.status!=='active'?' (severed)':''}</span>`
         : `<span class="chip warnchip">no comms channel yet — this agent has no telegram bot of its own</span>`;})()}</div>
-      <div class="acts">${LIVE&&!i.activated?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}<button class="btn danger" data-revoke-id="${i.key}">Revoke authority (rotate key)</button></div></div>`;}).join('')}
+      <div class="acts">${LIVE&&!i.activated&&i.signer!=='director'?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}<button class="btn danger" data-revoke-id="${i.key}">${i.signer==='director'?'Remove identity':'Revoke authority (rotate key)'}</button></div></div>`;}).join('')}
       <div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add identity</h3>
         <div class="muted">Provide the metadata; the key is generated <b>on the box</b> and stored SOPS-encrypted — the browser never sees an nsec.</div>
@@ -471,8 +471,9 @@ function draw(){
           <label>Handle (NIP-05)</label><input id="ni-handle" placeholder="scout@nave.pub">
           <label>Display name</label><input id="ni-name" placeholder="Scout">
           <label>Signer</label>
-          <select id="ni-signer"><option value="custodial">custodial — key generated on the box (SOPS)</option><option value="bunker">NIP-46 bunker — key stays on your device</option></select>
+          <select id="ni-signer"><option value="custodial">custodial — key generated on the box (SOPS)</option><option value="bunker">NIP-46 bunker — key stays on your device</option><option value="director">Director-path (Ngage) — you approve &amp; sign; no key on the box</option></select>
           <input id="ni-bunker" placeholder="bunker://… connection string" style="display:none">
+          <input id="ni-npub" placeholder="npub1… — this identity's public key (you hold its secret)" style="display:none">
           <button class="btn primary" id="ni-create">Create identity</button>
           <div class="note">Then wire it to a channel in <b>Routing</b>, and publish its profile.</div>
         </div></div></div>`;
@@ -658,12 +659,27 @@ function draw(){
     draw();syncConfig()});
   // create identity
   const sig=document.getElementById('ni-signer');
-  if(sig) sig.onchange=()=>{document.getElementById('ni-bunker').style.display=sig.value==='bunker'?'block':'none'};
+  if(sig) sig.onchange=()=>{
+    document.getElementById('ni-bunker').style.display=sig.value==='bunker'?'block':'none';
+    document.getElementById('ni-npub').style.display=sig.value==='director'?'block':'none';
+  };
   const nic=document.getElementById('ni-create');
-  if(nic) nic.onclick=()=>{
+  if(nic) nic.onclick=async ()=>{
     const handle=(document.getElementById('ni-handle').value||'').trim()||'new@nave.pub';
     const key=handle.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g,'')||('id'+S.identities.length);
     const signer=document.getElementById('ni-signer').value;
+    // Director-path (Ngage) identity: keyless, npub-only, and it's REAL — it's
+    // registered on the runtime so you can wire it to the Ngage column in
+    // Routing. Nactor never holds its key; you sign for it via Ngage.
+    if(signer==='director'){
+      const npub=(document.getElementById('ni-npub').value||'').trim();
+      if(!npub.startsWith('npub1')){alert('Enter this identity’s npub — you hold its secret; the box never does.');return;}
+      if(!LIVE){alert('Connect as a Director to add a live identity.');return;}
+      try{ await api('POST','/api/identity',{name:key,npub,handle,director:true}); await refresh(); tab='identities'; draw(); }
+      catch(e){ alert('Could not add identity: '+e.message); }
+      return;
+    }
+    // custodial / bunker: not yet wired to a runtime create endpoint — local only.
     const fakeNpub='npub1'+Array.from({length:38},()=>'0123456789acdefghjklmnpqrstuvwxyz'[Math.floor(Math.random()*33)]).join('');
     S.identities.push({key,handle,npub:fakeNpub,signer,status:'active'});
     tab='identities';draw();

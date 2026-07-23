@@ -462,6 +462,19 @@ async function identitiesView() {
       activated: (config.activations && config.activations[k]) || null,
     })
   }
+  // Director-path (Ngage) identities are KEYLESS — no on-box nsec, so they never
+  // appear in IDS/IMPORTED. They live in config only; surface them here so the
+  // app can show them and wire them to the Ngage approval path. Nactor never
+  // signs for them — the Director approves in his own hand via Ngage (AD-10).
+  for (const [k, meta] of Object.entries(config.identitiesMeta || {})) {
+    if (names.has(k) || meta.signer !== 'director') continue
+    out.push({
+      key: k, handle: meta.handle || defaultHandle(k), npub: meta.npub || null,
+      signer: 'director', status: meta.status || 'active',
+      source: 'director-path — no on-box key; you sign via Ngage',
+      activated: null,
+    })
+  }
   return out
 }
 
@@ -682,6 +695,27 @@ const server = createServer(async (req, res) => {
     }
 
     if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
+    if (path === '/api/identity' && req.method === 'POST') {
+      // Register a DIRECTOR-PATH (Ngage) identity: keyless, npub-only. Nactor
+      // never holds its key and never signs for it — the Director approves it in
+      // his own hand via Ngage (AD-10). Custodial identities do NOT come through
+      // here; they arrive as env keys or a Director-signed credential scope.
+      const name = String(body.name || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      if (!name) return json(res, 400, { error: 'name required' })
+      if (!(body.director === true || body.path === 'director')) {
+        return json(res, 400, { error: 'only director-path (Ngage) identities can be added here — a custodial key comes from env or a Director-signed credential grant' })
+      }
+      let hex; try { hex = nip19.decode(String(body.npub || '')).data } catch { hex = null }
+      if (typeof hex !== 'string' || hex.length !== 64) return json(res, 400, { error: 'a valid npub is required for a director-path identity' })
+      if (IDS[name] || IMPORTED.has(name)) return json(res, 409, { error: `'${name}' already exists as an on-box (keyed) identity` })
+      config.identitiesMeta[name] = {
+        handle: body.handle || `${name}@nave.pub`,
+        signer: 'director', npub: nip19.npubEncode(hex), path: 'director', status: 'active',
+      }
+      saveConfig(config)
+      console.log(`  identity: registered director-path (Ngage) '${name}' → ${nip19.npubEncode(hex).slice(0, 16)}… (keyless — Director signs via Ngage)`)
+      return json(res, 200, { ok: true, identity: name, identities: await identitiesView() })
+    }
     if (path === '/api/state' && req.method === 'GET') {
       return json(res, 200, {
         director: nip19.npubEncode(pubkey),               // the Director making this request
