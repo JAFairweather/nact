@@ -148,7 +148,8 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
     "nostr-tools/pool": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
     "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
     "nave-connect": "./lib/nave-connect.mjs?v=2",
-    "nave-titlebar": "./lib/nave-titlebar.mjs?v=2"
+    "nave-titlebar": "./lib/nave-titlebar.mjs?v=2",
+    "nact-routing": "./lib/routing.mjs?v=2"
   }
 }
 </script>
@@ -462,25 +463,34 @@ function draw(){
         </div></div></div>`;
   }
   if(tab==='routing'){
-    const rchans=approvalChannels(), cchans=commsChannels();
+    // AD-10: each identity binds to exactly ONE approval path, decided by who
+    // signs. Split the approval columns into the box gate (Nactor signs) and
+    // the director path (Ngage — the Director signs in his own hand). Ordering
+    // box-first, director-last keeps the two groups contiguous under their headers.
+    const isDir=c=>window.__nact?.routing?.isDirectorPath?.(c) ?? (String(c.kind||'').split(' ')[0]==='Ngage');
+    const boxCh=approvalChannels().filter(c=>!isDir(c)), dirCh=approvalChannels().filter(isDir);
+    const rchans=[...boxCh,...dirCh], cchans=commsChannels();
     const commsOwns=(c,k)=>c.owner===k||(c.covers||[]).includes(k);
-    h=`<div class="card"><div class="label" style="margin-top:0">Routing — approval vs. communications, side by side</div>
-      <div class="muted" style="margin:6px 0 12px">Two kinds of channel, laid out together so the difference is visible. <b>🛡 Approval</b> channels are the <b>shared gate</b> — where an identity's proposals go to be approved; they reach every agent, and you click a cell to bind/unbind. <b>💬 Communications</b> channels are each agent's <b>own line</b> for normal messaging (like Luke's assistant bot); each belongs to exactly one agent, so this side is read-only — ownership comes from the agent's credential grant, not a toggle.</div>
+    const bindingOf=k=>window.__nact?.routing?.approvalBindingOf?.(S.channels,k)||approvalChannels().find(c=>(c.covers||[]).includes(k))||null;
+    h=`<div class="card"><div class="label" style="margin-top:0">Routing — one approval path per identity</div>
+      <div class="muted" style="margin:6px 0 12px"><b>Whoever will sign the published post decides where approval happens</b> — key custody, not preference. An agent whose key is on the box takes the <b>🛡 box gate</b> (Nactor signs the instant you approve). An identity the Director signs for takes the <b>✋ Ngage</b> path (the draft is gift-wrapped to his npub; he signs in his own hand). The two are <b>exclusive</b>: clicking a cell <b>moves</b> an identity's single approval path, it doesn't add a second. <b>💬 Communications</b> stays read-only — an agent's own line, owned via its credential grant.</div>
       <table class="matrix"><thead>
       <tr><th style="border:0"></th>
-        ${rchans.length?`<th colspan="${rchans.length}" style="text-align:center;color:var(--accent-bright);border-bottom:2px solid var(--accent-bright)">🛡 Approval — shared gate</th>`:''}
+        ${boxCh.length?`<th colspan="${boxCh.length}" style="text-align:center;color:var(--accent-bright);border-bottom:2px solid var(--accent-bright)">🛡 Box gate — Nactor signs</th>`:''}
+        ${dirCh.length?`<th colspan="${dirCh.length}" style="text-align:center;color:var(--crit);border-bottom:2px solid var(--crit)">✋ Ngage — the Director signs</th>`:''}
         ${cchans.length?`<th colspan="${cchans.length}" style="text-align:center;color:var(--low);border-bottom:2px solid var(--low)">💬 Communications — own line</th>`:''}</tr>
       <tr><th>Identity</th>
-      ${rchans.map(c=>`<th>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}
+      ${rchans.map((c,ci)=>`<th${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}
       ${cchans.map((c,ci)=>`<th${ci===0?' style="border-left:2px solid var(--low)"':''}>${esc(c.name)}<small>${esc(chanShort(c))}${c.status!=='active'?' · severed':''}</small></th>`).join('')}</tr></thead>
-      <tbody>${S.identities.map(i=>`<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}</td>${rchans.map(c=>{
-        const wired=c.covers.includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
+      <tbody>${S.identities.map(i=>{const bound=bindingOf(i.key);return `<tr><td>${esc(i.handle)}${i.status!=='active'?' <span class="muted">(revoked)</span>':''}${bound?` <span class="badge ${isDir(bound)?'b-crit':'b-ok'}" style="vertical-align:1px">${isDir(bound)?'✋ Ngage':'🛡 box'}</span>`:' <span class="muted" style="font-size:11px">no path</span>'}</td>${rchans.map((c,ci)=>{
+        const wired=(c.covers||[]).includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
         const cls=wired?(live?'on':'stale'):'off', mark=wired?(live?'✓':'✕'):'○';
-        return `<td><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire':'click to wire'}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
+        return `<td${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to clear this path':'click to bind this identity here (moves it off any other path)'}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
         const owns=commsOwns(c,i.key), live=owns&&c.status==='active'&&i.status==='active';
         const cls=owns?(live?'on':'stale'):'off', mark=owns?(live?'💬':'✕'):'·';
-        return `<td${ci===0?' style="border-left:2px solid var(--low)"':''}><span class="cell ${cls}" style="cursor:default" title="${owns?"this agent's own comms line":"not this agent's line"}">${mark}</span></td>`;}).join('')}</tr>`).join('')}</tbody></table>
-      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ○ not wired (click to toggle). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+        return `<td${ci===0?' style="border-left:2px solid var(--low)"':''}><span class="cell ${cls}" style="cursor:default" title="${owns?"this agent's own comms line":"not this agent's line"}">${mark}</span></td>`;}).join('')}</tr>`;}).join('')}</tbody></table>
+      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ bound &amp; live · ✕ severed · ○ not on this path (click to bind — exclusive). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+      ${!dirCh.length?`<div class="hint" style="margin-top:8px">No <b>✋ Ngage</b> path yet — add an <b>Ngage draft-grant</b> channel in <b>Channels</b> (no secret; just the Director's npub) to route an identity's drafts to the Director's own hand.</div>`:''}
       ${cchans.length<S.identities.length?`<div class="hint" style="margin-top:8px">Agents with a <b>·</b> in every Communications column have <b>no comms channel yet</b> — raise a request for one in <b>Channels</b>, then paste the bot token when it surfaces in Nvoy.</div>`:''}</div>`;
   }
   if(tab==='directors'){
@@ -558,9 +568,10 @@ function draw(){
         <div class="form">
           <label>Name</label><input id="nc-name" placeholder="Ops approvals">
           <label>Type</label>
-          <select id="nc-type"><option>Telegram bot</option><option>NIP-59 gift-wrap</option><option disabled>Signal (soon)</option><option disabled>Matrix (soon)</option></select>
+          <select id="nc-type"><option>Telegram bot</option><option>NIP-59 gift-wrap</option><option>Ngage draft-grant</option><option disabled>Signal (soon)</option><option disabled>Matrix (soon)</option></select>
           <label>Director</label><input id="nc-approver" placeholder="Telegram numeric id, or an npub">
-          <label>Secret</label><input id="nc-secret" placeholder="bot token / channel nsec — stored SOPS-encrypted on the box">
+          <label id="nc-secret-l">Secret</label><input id="nc-secret" placeholder="bot token / channel nsec — stored SOPS-encrypted on the box">
+          <div id="nc-ngage-note" class="hint" style="display:none">The <b>Ngage</b> path carries no on-box secret — the draft is gift-wrapped to the Director's npub and he signs it in his own hand. Set <b>Director</b> to that npub; leave Secret blank.</div>
           <button class="btn primary" id="nc-create">Add channel</button>
           <div class="note">Then wire identities to it in <b>Routing</b>.</div>
         </div></div></div>`;
@@ -619,8 +630,11 @@ function draw(){
   });
   v.querySelectorAll('[data-revoke-ch]').forEach(b=>b.onclick=()=>{const c=S.channels.find(x=>x.id===b.dataset.revokeCh);c.status='severed';draw();syncConfig()});
   v.querySelectorAll('[data-wire]').forEach(b=>b.onclick=()=>{const [ik,cid]=b.dataset.wire.split('|');
-    const c=S.channels.find(x=>x.id===cid);const at=c.covers.indexOf(ik);
-    if(at<0)c.covers.push(ik);else c.covers.splice(at,1);draw();syncConfig()});
+    // AD-10: exclusive per-identity approval path — binding here unbinds every
+    // other approval channel (toggleBinding, tested in lib/routing.test.mjs).
+    if(window.__nact?.routing) window.__nact.routing.toggleBinding(S.channels,ik,cid);
+    else{const c=S.channels.find(x=>x.id===cid);const at=c.covers.indexOf(ik);if(at<0)c.covers.push(ik);else c.covers.splice(at,1);}
+    draw();syncConfig()});
   // create identity
   const sig=document.getElementById('ni-signer');
   if(sig) sig.onchange=()=>{document.getElementById('ni-bunker').style.display=sig.value==='bunker'?'block':'none'};
@@ -634,13 +648,21 @@ function draw(){
     tab='identities';draw();
   };
   // create channel
+  // Ngage carries no on-box secret — hide the Secret field for that type.
+  const nct=document.getElementById('nc-type');
+  const ncToggleSecret=()=>{const ng=!(window.__nact?.routing?.needsSecret?.(nct.value) ?? true);
+    for(const id of ['nc-secret-l','nc-secret']){const el=document.getElementById(id);if(el)el.style.display=ng?'none':'';}
+    const note=document.getElementById('nc-ngage-note');if(note)note.style.display=ng?'':'none';};
+  if(nct){nct.onchange=ncToggleSecret;ncToggleSecret();}
   const ncc=document.getElementById('nc-create');
   if(ncc) ncc.onclick=()=>{
     const name=(document.getElementById('nc-name').value||'').trim()||'New channel';
     const type=document.getElementById('nc-type').value;
     const approver=(document.getElementById('nc-approver').value||'').trim()||'—';
-    S.channels.push({id:'ch'+S.channels.length+Date.now().toString(36).slice(-3),name,kind:type,approver,covers:[],status:'active'});
-    tab='channels';draw();
+    // Every channel added here is an approval endpoint; purpose makes the board
+    // (and the runtime) treat it as one. Ngage is the director path (AD-10).
+    S.channels.push({id:'ch'+S.channels.length+Date.now().toString(36).slice(-3),name,kind:type,purpose:'approval',approver,covers:[],status:'active'});
+    tab='channels';draw();syncConfig();
   };
   v.querySelectorAll('[data-tier]').forEach(b=>b.onclick=()=>{const p=S.policy[+b.dataset.tier];
     p.tier={low:'elevated',elevated:'critical',critical:'low'}[p.tier];draw();syncConfig()});
@@ -709,6 +731,7 @@ else {
 import { nip07Signer, nip46Signer, nostrConnectSigner,
          serializeSession, parseSession } from 'nave-connect';
 import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
+import * as routing from 'nact-routing';
 import { SimplePool, nip19 } from 'nostr-tools';
 
 const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;height:100%">
@@ -724,6 +747,7 @@ const REMEMBER = 'nact.session';   // same `remember` slot shape the other apps 
 
 window.__nact = window.__nact || {};
 window.__nact.titlebar = { render: renderTitlebar, update: updateTitlebar, seal: SEAL };
+window.__nact.routing = routing;   // the AD-10 approval-path model (tested in lib/routing.test.mjs)
 
 // The three sign-in methods, all returning nave-connect's uniform signer shape
 // ({ kind, getPublicKey, signEvent, … }) so the app never branches on method.
