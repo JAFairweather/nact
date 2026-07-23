@@ -102,5 +102,40 @@ await t('a non-approver cannot enact, tampered or not', async () => {
   assert.ok(nact.pending.has(id), 'an unauthorized attempt does not drain the queue entry')
 })
 
+// ---- P3: critical kinds cannot be one-tap approved -------------------------
+await t('a CRITICAL kind refuses a one-tap enact (no confirm) and stays pending', async () => {
+  const approval = captureApproval()
+  const nact = build(approval)
+  // kind 0 = profile edit = critical (see inspect.mjs).
+  const { id, risk } = await nact.propose({ identity: 'luke', event: { kind: 0, content: '{"name":"x"}' } })
+  assert.equal(risk, 'critical')
+  const out = await nact.enact({ id, verb: 'ok', approver: APPROVER })   // one tap, no confirm
+  assert.equal(out.enacted, false)
+  assert.equal(out.why, 'needs confirmation')
+  assert.equal(out.needsConfirm, true)
+  assert.ok(nact.pending.has(id), 'the proposal survives so a confirmed retry works')
+  const ack = approval.acks.find(a => a.id === id)
+  assert.match(ack.result.error, /critical action — confirm explicitly/)
+})
+
+await t('a CRITICAL kind enacts WITH an explicit confirm', async () => {
+  const approval = captureApproval()
+  const nact = build(approval)
+  const { id } = await nact.propose({ identity: 'luke', event: { kind: 3, content: '' } })   // contact-list replace
+  const out = await nact.enact({ id, verb: 'ok', approver: APPROVER, confirm: true })
+  // No relays configured → reaches broadcast (the confirm gate passed).
+  assert.equal(out.why, 'broadcast failed')
+  assert.match(approval.acks.find(a => a.id === id).result.error, /no relay accepted/)
+  assert.equal(nact.pending.has(id), false, 'a confirmed enact drains the proposal')
+})
+
+await t('a LOW-risk kind is unaffected — one tap still enacts', async () => {
+  const approval = captureApproval()
+  const nact = build(approval)
+  const { id } = await nact.propose({ identity: 'luke', event: { kind: 1, content: 'a note' } })
+  const out = await nact.enact({ id, verb: 'ok', approver: APPROVER })   // no confirm needed
+  assert.equal(out.why, 'broadcast failed')   // passed the gates, only the (absent) relays failed
+})
+
 console.log(`\n${pass}/${n} passed`)
 process.exit(pass === n ? 0 : 1)

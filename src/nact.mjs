@@ -91,7 +91,7 @@ export class Nact {
     }
     const fingerprint = getEventHash(unsigned)
     const report = inspect(unsigned)
-    this.pending.set(id, { identity, unsigned, fingerprint, created: Date.now() })
+    this.pending.set(id, { identity, unsigned, fingerprint, report, created: Date.now() })
     const draft = { kind: unsigned.kind, content: unsigned.content, tags: unsigned.tags }
     const sent = await this.approval.send({ id, identity, npub: idn.npub, draft, context, fingerprint, report })
     if (!sent) { this.pending.delete(id); throw new Error('nact: approval delivery failed') }
@@ -106,15 +106,25 @@ export class Nact {
   }
 
   // Enact a decision: verify the human, then sign + broadcast (or discard).
-  async enact({ id, verb, approver } = {}) {
+  // `confirm` is the explicit second step a CRITICAL-tier action requires
+  // (hardening P3): a critical kind — profile edit, contact/relay-list replace,
+  // deletion, key/grant changes — must not be one-tapped.
+  async enact({ id, verb, approver, confirm } = {}) {
     if (!(await this.approval.isApprover(approver))) {
       await this.approval.ack({ id, result: { error: 'not authorized' } })
       return { enacted: false, why: 'not authorized' }
     }
     const p = this.pending.get(id)
     if (!p) { await this.approval.ack({ id, result: { error: 'expired' } }); return { enacted: false, why: 'expired' } }
+    if (verb !== 'ok') { this.pending.delete(id); await this.approval.ack({ id, result: { rejected: true } }); return { enacted: false, why: 'rejected' } }
+    // P3: a critical action needs deliberate confirmation, never a single tap.
+    // Keep the proposal pending so a confirmed retry (confirm:true) still works —
+    // do NOT drain it here.
+    if (p.report?.risk === 'critical' && !confirm) {
+      await this.approval.ack({ id, result: { error: `${p.report.kindLabel} is a critical action — confirm explicitly (this is not a one-tap approval)`, needsConfirm: true } })
+      return { enacted: false, why: 'needs confirmation', needsConfirm: true }
+    }
     this.pending.delete(id)
-    if (verb !== 'ok') { await this.approval.ack({ id, result: { rejected: true } }); return { enacted: false, why: 'rejected' } }
 
     const idn = await this._resolve(p.identity)
     // WYSIWYS pre-sign gate (hardening P1): recompute the id of the bytes we
