@@ -297,6 +297,37 @@ revoke.
   reads these grants the same way it reads its config (Nvoy MCP — see
   `architecture.md`).
 
+### Status (as shipped)
+
+- **P1/P3 — library gates.** `created_at` frozen at propose; the fingerprint is
+  re-verified *before* signing and again after; critical kinds cannot be one-tap
+  enacted. Proven offline in `nactor/wysiwys.test.mjs`.
+- **P2 — faithful render.** Hidden/bidi + homoglyph flags and full tag/kind
+  surfacing (`src/inspect.mjs`), rendered in the adapters and the web app.
+- **P4 — channel binding (this pass, nact#10).** `lib/channel-binding.mjs`
+  implements the model + the nonce ceremony + the honor rule:
+  - `bindingKind`/`mayHonor` — intrinsic channels (Web/NIP-59/Ngage) are always
+    honorable; out-of-band channels **fail closed** until verified.
+  - `bindingStatement`/`newNonce`/`verifyBinding` — the ceremony. `verifyBinding`
+    additionally checks `getEventHash(event) === event.id`, because this
+    nostr-tools `verifyEvent` checks the sig over the stored id *without*
+    recomputing the hash — so a lone Director signature could otherwise be reused
+    under a swapped statement. The forgery is caught (test:
+    `nactor/channel-binding.test.mjs`).
+  - `bindingGrantPayload`/`verifiedChannelOf`/`BINDING_SCOPE` — the binding as a
+    revocable NIP-DA scope grant; a live grant ⇒ verified, key rotation ⇒ gone.
+  - Enforced in `src/adapters/telegram.mjs`: `isApprover` now requires *id match
+    AND a live binding*, dereferenced on every approval; `isBound()`/`channel`
+    let a handler tell "wrong person" from "right person, unbound channel".
+  - **Integration point (open):** the runtime feeds the adapter
+    `verified: () => <Set of channel ids from live binding grants>`, sourced via
+    the same grant-reader the Nactor already uses for config. The live enact path
+    today is the NIP-98 web queue (intrinsically bound), so no live channel is
+    unbound by this change; the gate arms the moment a Telegram/out-of-band
+    approval path is wired.
+- **P5 (open) — Mini-App signer** at `nact.nave.pub/sign` (NIP-46 + faithful
+  preview) and the per-identity/kind tier control plane.
+
 ## Reporting
 
 Security-relevant findings — a way to enact without the approver's signature, a
