@@ -634,7 +634,13 @@ function draw(){
   }
   v.innerHTML=h;
   // wire actions
-  v.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>decide(b.dataset.ok,'enacted'));
+  v.querySelectorAll('[data-ok]').forEach(b=>b.onclick=()=>{
+    // P3: a critical action is never one-tap — require a deliberate confirm
+    // before we even send. The runtime enforces this too (refuses confirm:false).
+    const p=S.queue.find(x=>x.id===b.dataset.ok);
+    if(p&&p.tier==='critical'&&!confirm(`Critical action — ${p.klabel}.\n\nThis replaces or edits high-impact state and cannot be undone with a tap. Enact it?`)) return;
+    decide(b.dataset.ok,'enacted',p&&p.tier==='critical');
+  });
   v.querySelectorAll('[data-no]').forEach(b=>b.onclick=()=>decide(b.dataset.no,'rejected'));
   v.querySelectorAll('[data-revoke-id]').forEach(b=>b.onclick=()=>{const i=S.identities.find(x=>x.key===b.dataset.revokeId);i.status='revoked';draw()});
   v.querySelectorAll('[data-activate]').forEach(b=>b.onclick=async()=>{
@@ -695,9 +701,9 @@ function draw(){
   v.querySelectorAll('[data-rm-dir]').forEach(b=>b.onclick=()=>{
     S.directors=S.directors.filter(d=>d.npub!==b.dataset.rmDir||d.bootstrap);draw();syncConfig();});
 }
-async function decide(id,outcome){
+async function decide(id,outcome,confirm){
   if(LIVE){
-    try{ await api('POST','/api/enact',{id,verb:outcome==='enacted'?'ok':'no'}); await refresh(); }
+    try{ await api('POST','/api/enact',{id,verb:outcome==='enacted'?'ok':'no',confirm:confirm===true}); await refresh(); }
     catch(e){ alert('enact failed: '+e.message); }
     return;
   }

@@ -703,7 +703,7 @@ const server = createServer(async (req, res) => {
       return json(res, 200, out)
     }
     if (path === '/api/enact' && req.method === 'POST') {
-      const out = await nact.enact({ id: body.id, verb: body.verb === 'ok' || body.verb === 'enacted' ? 'ok' : 'no', approver: pubkey })
+      const out = await nact.enact({ id: body.id, verb: body.verb === 'ok' || body.verb === 'enacted' ? 'ok' : 'no', approver: pubkey, confirm: body.confirm === true })
       return json(res, 200, out)
     }
     if (path === '/api/config' && req.method === 'PUT') {
