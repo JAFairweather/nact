@@ -117,6 +117,17 @@ export class Nact {
     if (verb !== 'ok') { await this.approval.ack({ id, result: { rejected: true } }); return { enacted: false, why: 'rejected' } }
 
     const idn = await this._resolve(p.identity)
+    // WYSIWYS pre-sign gate (hardening P1): recompute the id of the bytes we
+    // are ABOUT to sign and compare it to the fingerprint computed at propose —
+    // the one the approval surface showed the human. This must happen BEFORE
+    // the signer sees the event: a bunker's signature over tampered bytes
+    // would exist in the world even if we then refused to broadcast it. The
+    // post-sign check below still stands — it catches a signer that mutates or
+    // re-stamps; this one catches a queue entry that changed while pending.
+    if (getEventHash(p.unsigned) !== p.fingerprint) {
+      await this.approval.ack({ id, result: { error: 'approved bytes diverged while pending (fingerprint mismatch) — refused before signing' } })
+      return { enacted: false, why: 'pre-sign fingerprint mismatch' }
+    }
     let signed
     try {
       // Sign the EXACT frozen bytes that were shown and approved — never a
