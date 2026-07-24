@@ -771,7 +771,7 @@ const server = createServer(async (req, res) => {
       // exists for them, so the draft is raised to the Director's Ngage desk
       // instead (nact#37). Everything else takes the box gate unchanged.
       if (config.identitiesMeta?.[body.identity]?.signer === 'director') {
-        const out = await ngage.raise({ identity: body.identity, event: body.event, context: body.context })
+        const out = await ngage.raise({ identity: body.identity, event: body.event, context: body.context, pen: body.pen })
         return out.ok ? json(res, 200, { id: out.id, status: out.status, scopeName: out.scopeName, grantee: out.grantee, relays: out.relays })
                       : json(res, out.code || 500, { error: out.error })
       }

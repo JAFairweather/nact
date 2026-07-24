@@ -63,7 +63,7 @@ everything else (add a co-Director, repoint the address) is edited from the app.
 | --- | --- | --- |
 | GET | `/api/health` | liveness; identity names, `directorsConfigured`, **`nactorNpub`** (the grantee address); **no secrets, no auth** |
 | GET | `/api/state` | `directors`, `nactorAddress`, `nactorNpub`, identities (npub/signer/status/**source**), **credentials** (names/types only), channels, tiers, queue, history |
-| POST | `/api/propose` | `{identity, event:{kind,content,tags}, context}` → queue. A **director-path** identity forks before the queue: its draft is **raised to the Director's Ngage desk** as a NIP-DA `draft:post/*` grant (kind-1 only; nact#37) |
+| POST | `/api/propose` | `{identity, event:{kind,content,tags}, context}` → queue. A **director-path** identity forks before the queue: its draft is **raised to the Director's Ngage desk** as a NIP-DA `draft:post/*` grant (kind-1 only; nact#37) — and MUST carry **`pen`**, the draft JSON signed by the identity's own key (**the pen rule**, nact#44: the box couriers, only the pen authors; verified against the registered npub, refused 403 otherwise, re-verified on the desk) |
 | POST | `/api/enact` | `{id, verb}` → sign the frozen bytes + broadcast, or reject |
 | POST | `/api/withdraw` | `{scopeId}` → tombstone a raised director-path draft; his desk shows it withdrawn |
 | PUT | `/api/config` | `{directors?, nactorAddress?, channels?, tiers?, identitiesMeta?}` → persist (refuses to remove the last Director) |
