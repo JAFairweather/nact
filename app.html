@@ -502,12 +502,20 @@ function draw(){
         const chPath=isDir(c)?'director':'box', mine=chPath===myPath;
         const wired=(c.covers||[]).includes(i.key), live=wired&&c.status==='active'&&i.status==='active';
         if(!mine) return `<td${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}><span class="cell off" style="cursor:not-allowed;opacity:.35" title="${myPath==='box'?'key custody decides: this identity signs on the box — its approvals ride the 🛡 box gate, not Ngage':'key custody decides: only the Director signs for this identity — its drafts ride ✋ Ngage, not the box gate'}">·</span></td>`;
-        const cls=wired?(live?'on':'stale'):'off', mark=wired?(live?'✓':'✕'):'○';
-        return `<td${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${wired?'click to unwire this transport':'click to wire this transport (transports within the gate are independent)'}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
+        // Honesty (nact#46): Nactor's only approval adapter is the Web queue. A
+        // wired box-path Telegram channel is configured-but-NOT-honored — Nactor
+        // never consumes its taps (the Telegram approvals you receive ride
+        // luke-service's own propose lane, not this runtime). Show that, don't imply live.
+        const honored=isDir(c)||chanShort(c)==='Web';
+        const cls=wired?(honored?(live?'on':'stale'):'stale'):'off';
+        const mark=wired?(honored?(live?'✓':'✕'):'◌'):'○';
+        const tip=wired?(honored?'click to unwire this transport':'CONFIGURED, NOT HONORED — Nactor delivers approvals to the Web queue only; this lane\'s taps are not consumed here (nact#46). Click to unwire.'):'click to wire this transport (transports within the gate are independent)';
+        return `<td${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${tip}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
         const owns=commsOwns(c,i.key), live=owns&&c.status==='active'&&i.status==='active';
         const cls=owns?(live?'on':'stale'):'off', mark=owns?(live?'💬':'✕'):'·';
         return `<td${ci===0?' style="border-left:2px solid var(--low)"':''}><span class="cell ${cls}" style="cursor:default" title="${owns?"this agent's own comms line":"not this agent's line"}">${mark}</span></td>`;}).join('')}</tr>`;}).join('')}</tbody></table>
-      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ○ not wired (click to wire — <b>transports within a gate are independent</b>) · <span style="opacity:.5">·</span> wrong path (key custody decides; not clickable). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ◌ <b>configured but not honored</b> (Nactor delivers to the Web queue only; nact#46) · ○ not wired (click to wire — <b>transports within a gate are independent</b>) · <span style="opacity:.5">·</span> wrong path (key custody decides; not clickable). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+      ${boxCh.some(c=>chanShort(c)!=='Web')?`<div class="hint" style="margin-top:8px">◌ <b>The Telegram approval lane is not consumed by this runtime.</b> Nactor's only approval adapter is the Web queue; the Telegram approvals you actually receive ride luke-service's own propose lane, which predates this control plane and isn't governed here (nact#46). Wiring a ◌ cell records intent, but changes nothing at runtime until an approval multiplexer lands.</div>`:''}
       ${!dirCh.length?`<div class="hint" style="margin-top:8px">No <b>✋ Ngage</b> path yet — add an <b>Ngage draft-grant</b> channel in <b>Channels</b> (no secret; just the Director's npub) to route an identity's drafts to the Director's own hand.</div>`:''}
       ${cchans.length<S.identities.length?`<div class="hint" style="margin-top:8px">Agents with a <b>·</b> in every Communications column have <b>no comms channel yet</b> — raise a request for one in <b>Channels</b>, then paste the bot token when it surfaces in Nvoy.</div>`:''}</div>`;
   }
