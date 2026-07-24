@@ -36,6 +36,7 @@ import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
 import { ngageDelivery } from './ngage-delivery.mjs'
+import { McpGrantClient } from './mcp-grant-client.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
 import { runMailVerb } from './connectors/mail.mjs'
@@ -334,13 +335,22 @@ function safeEqual(a, b) {
 const approval = webQueueApproval({ isDirector })
 const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
 
-// The director-path (Ngage) delivery runtime — nact#37. Proposals for a keyless
-// `signer:'director'` identity never reach `nact` (there is no signer); they are
-// raised to the Director's desk as NIP-DA draft grants, authored by NACTOR's own
-// key. Lazy relay: only built if a director-path proposal ever arrives.
+// The director-path (Ngage) delivery runtime — nact#37/#39. Proposals for a
+// keyless `signer:'director'` identity never reach `nact` (there is no signer);
+// they are raised to the Director's desk as NIP-DA draft grants, authored by
+// the NACTOR identity. Under the relay transport this process holds the key
+// and signs itself; under the M7 mcp transport the key lives with nvoy-mcp,
+// so authoring is delegated to its draft tools (nvoy#28) — same identity,
+// one service over. Both relay and client are lazy: nothing is built unless
+// a director-path proposal actually arrives.
 let _ngageRelay = null
+let _ngageMcp = null
 const ngage = ngageDelivery({
   sk: NACTOR_SK,
+  mcp: (!NACTOR_SK && GRANT_TRANSPORT === 'mcp' && MCP_URL) ? {
+    draftPublish: (args) => (_ngageMcp ??= new McpGrantClient({ url: MCP_URL })).draftPublish(args),
+    draftWithdraw: (d) => (_ngageMcp ??= new McpGrantClient({ url: MCP_URL })).draftWithdraw(d),
+  } : null,
   relay: { publish: ev => (_ngageRelay ??= new LiveRelay(RELAYS)).publish(ev), query: f => (_ngageRelay ??= new LiveRelay(RELAYS)).query(f) },
   config: () => config,
   onEvent: recordGrantEvent,

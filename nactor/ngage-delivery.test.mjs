@@ -120,4 +120,58 @@ assert.equal((await ngage.withdraw(out.id)).status, 'withdrawn', 'withdraw is id
 assert.deepEqual(events.map(e => e.t), ['ngage-raise', 'ngage-withdraw'])
 console.log('✓ withdraw: tombstoned — the desk shows it withdrawn, nothing signable')
 
+// --- the mcp authoring path (nact#39 / nvoy#28) ----------------------------
+// The M7 box: no NACTOR_NSEC in this process — the key lives with nvoy-mcp,
+// whose draft tools mint and withdraw. The fake below does EXACTLY what the
+// service's DraftDesk does (fresh scope + key, gen 1, publishScope + grant,
+// withdraw by supersession), signed by the same "service-held" key, so the
+// Director-side proof is as real as the local path's.
+import { publishScope, grant, newScopeKey } from './lib/nipxx.mjs'
+import { randomBytes } from 'node:crypto'
+const serviceSk = nactorSk                        // same identity, one service over
+const minted = new Map()                          // d → generation
+const fakeMcp = {
+  draftPublish: async ({ granteeNpub, payload }) => {
+    const d = randomBytes(12).toString('hex')
+    const scopeKey = newScopeKey()
+    const scope_name = `draft:post/${d.slice(0, 8)}`
+    await publishScope(relay, serviceSk, { scopeId: d, generation: 1, scopeKey, payload })
+    await grant(relay, serviceSk, nip19.decode(granteeNpub).data, { scopeId: d, generation: 1, scopeKey, scopeName: scope_name })
+    minted.set(d, 1)
+    return { d, v: 1, scope_name, granted_to: granteeNpub }
+  },
+  draftWithdraw: async (d) => {
+    if (!minted.has(d)) throw new Error('nvoy_draft_withdraw: NVOY_UNKNOWN_DRAFT')
+    await publishScope(relay, serviceSk, { scopeId: d, generation: 2, scopeKey: newScopeKey(), payload: {} })
+    minted.set(d, 2)
+    return { withdrawn: true, d, v: 2 }
+  },
+}
+
+const mcpEvents = []
+const ngageMcp = ngageDelivery({ sk: null, mcp: fakeMcp, relay, config: () => cfg, onEvent: e => mcpEvents.push(e) })
+const mout = await ngageMcp.raise({ identity: 'jafquill', event: { kind: 1, content: 'raised keyless, through the mcp desk' } })
+assert.equal(mout.ok, true)
+assert.equal(mout.status, 'raised-to-director')
+assert.ok(mout.scopeName.startsWith('draft:post/'))
+const mdesk = (await directorDesk(new Set([nactorPub]))).filter(g => g.scopeId === mout.id)
+assert.equal(mdesk.length, 1, 'the mcp-raised draft reaches the same desk')
+const mscope = await fetchScope(relay, mdesk[0])
+assert.equal(mscope.status, 'ok')
+assert.equal(mscope.data.text, 'raised keyless, through the mcp desk', 'byte-identical through the mcp path')
+assert.equal(ngageMcp.listRaised()[0].via, 'mcp')
+const mw = await ngageMcp.withdraw(mout.id)
+assert.equal(mw.status, 'withdrawn')
+assert.notEqual((await fetchScope(relay, mdesk[0])).status, 'ok', 'mcp withdraw tombstones')
+assert.deepEqual(mcpEvents.map(e => e.t), ['ngage-raise', 'ngage-withdraw'])
+
+// a failing mcp path surfaces as 502, never a silent half-raise
+const ngageMcpDown = ngageDelivery({ sk: null, mcp: { draftPublish: async () => { throw new Error('ECONNREFUSED') } }, relay, config: () => cfg })
+assert.equal((await ngageMcpDown.raise({ identity: 'jafquill', event: { kind: 1, content: 'x' } })).code, 502)
+
+// neither path → the honest 503 stands
+const ngageNeither = ngageDelivery({ sk: null, mcp: null, relay, config: () => cfg })
+assert.equal((await ngageNeither.raise({ identity: 'jafquill', event: { kind: 1, content: 'x' } })).code, 503)
+console.log('✓ mcp path: keyless raise → same desk, same gates; withdraw tombstones; down → 502, neither → 503')
+
 console.log('\nngage-delivery: all proofs pass')

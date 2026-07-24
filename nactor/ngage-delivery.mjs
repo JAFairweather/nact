@@ -69,11 +69,16 @@ export function draftPayloadFrom({ event, context, proposedBy } = {}) {
 }
 
 /**
- * The runtime. `sk` is NACTOR's key (the sending author), `relay` any
- * {publish, query} adapter, `config` a live accessor (edits apply without a
- * restart, matching the rest of the runtime), `onEvent` the AD-1 audit feed.
+ * The runtime. Two authoring paths, exactly one of which is wired per box:
+ *   `sk`  — NACTOR's key held locally (relay grant-transport): this module
+ *           signs the scope + wrap itself over `relay`;
+ *   `mcp` — the M7 cutover (nact#39): the key lives with nvoy-mcp, so
+ *           authoring is delegated to it ({ draftPublish, draftWithdraw },
+ *           nvoy#28) and the SAME identity signs, one service over.
+ * `config` is a live accessor (edits apply without a restart), `onEvent`
+ * the AD-1 audit feed.
  */
-export function ngageDelivery({ sk, relay, config, onEvent = () => {} } = {}) {
+export function ngageDelivery({ sk, mcp, relay, config, onEvent = () => {} } = {}) {
   const raised = new Map()   // scopeId → { identity, grantee, scopeName, generation, text, at, status }
 
   // Raise a director-path proposal to the Director's desk. Returns
@@ -83,7 +88,7 @@ export function ngageDelivery({ sk, relay, config, onEvent = () => {} } = {}) {
     const meta = cfg?.identitiesMeta?.[identity]
     if (!meta || meta.signer !== 'director') return { ok: false, code: 400, error: `'${identity}' is not a director-path identity` }
     if ((meta.status || 'active') !== 'active') return { ok: false, code: 409, error: `'${identity}' is revoked` }
-    if (!sk) return { ok: false, code: 503, error: 'this runtime holds no NACTOR_NSEC — it cannot author draft grants (grant transport: mcp?)' }
+    if (!sk && !mcp) return { ok: false, code: 503, error: 'this runtime holds no NACTOR_NSEC and no mcp draft path — it cannot author draft grants (set NACT_MCP_URL under the mcp grant transport)' }
     const ch = ngageChannelFor(cfg, identity)
     if (!ch) return { ok: false, code: 409, error: `'${identity}' has no Ngage approval path — bind it under the Ngage column in Routing first` }
     let grantee; try { grantee = nip19.decode(String(ch.approver || '')).data } catch { grantee = null }
@@ -93,15 +98,30 @@ export function ngageDelivery({ sk, relay, config, onEvent = () => {} } = {}) {
     const mapped = draftPayloadFrom({ event, context, proposedBy: meta.handle || identity })
     if (!mapped.ok) return mapped
 
-    const scopeId = randomBytes(12).toString('hex')             // opaque d tag
-    const scopeKey = newScopeKey()
-    const scopeName = `draft:post/${scopeId.slice(0, 8)}`       // the scribe's shape, verbatim
-    await publishScope(relay, sk, { scopeId, generation: 1, scopeKey, payload: mapped.payload })
-    const { acks } = await grant(relay, sk, grantee, { scopeId, generation: 1, scopeKey, scopeName })
+    let scopeId, scopeName, acks = null
+    if (sk) {
+      scopeId = randomBytes(12).toString('hex')                 // opaque d tag
+      const scopeKey = newScopeKey()
+      scopeName = `draft:post/${scopeId.slice(0, 8)}`           // the scribe's shape, verbatim
+      await publishScope(relay, sk, { scopeId, generation: 1, scopeKey, payload: mapped.payload })
+      ;({ acks } = await grant(relay, sk, grantee, { scopeId, generation: 1, scopeKey, scopeName }))
+    } else {
+      // The key lives with nvoy-mcp; it mints the scope (same draft:post/<id8>
+      // default) and signs as the same identity. Failures surface as errors,
+      // never a silent half-raise.
+      let res
+      try {
+        res = await mcp.draftPublish({ granteeNpub: nip19.npubEncode(grantee), payload: mapped.payload })
+      } catch (e) {
+        return { ok: false, code: 502, error: `mcp draft path failed: ${e?.message || 'unreachable'}` }
+      }
+      scopeId = res.d
+      scopeName = res.scope_name
+    }
 
     const rec = {
       identity, grantee: nip19.npubEncode(grantee), scopeName, generation: 1,
-      text: mapped.payload.text, at: Date.now(), status: 'raised',
+      text: mapped.payload.text, at: Date.now(), status: 'raised', via: sk ? 'local' : 'mcp',
     }
     raised.set(scopeId, rec)
     onEvent({ t: 'ngage-raise', identity, scopeId, scopeName, when: rec.at })
@@ -114,8 +134,16 @@ export function ngageDelivery({ sk, relay, config, onEvent = () => {} } = {}) {
     const rec = raised.get(scopeId)
     if (!rec) return { ok: false, code: 404, error: 'no such raised draft (this runtime raised nothing under that id)' }
     if (rec.status === 'withdrawn') return { ok: true, id: scopeId, status: 'withdrawn' }
-    if (!sk) return { ok: false, code: 503, error: 'this runtime holds no NACTOR_NSEC' }
-    await deleteScope(relay, sk, { scopeId, generation: rec.generation })
+    if (!sk && !mcp) return { ok: false, code: 503, error: 'this runtime holds no NACTOR_NSEC and no mcp draft path' }
+    if (sk) {
+      await deleteScope(relay, sk, { scopeId, generation: rec.generation })
+    } else {
+      try {
+        await mcp.draftWithdraw(scopeId)
+      } catch (e) {
+        return { ok: false, code: 502, error: `mcp draft path failed: ${e?.message || 'unreachable'}` }
+      }
+    }
     rec.status = 'withdrawn'
     onEvent({ t: 'ngage-withdraw', identity: rec.identity, scopeId, when: Date.now() })
     return { ok: true, id: scopeId, status: 'withdrawn' }
