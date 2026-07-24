@@ -265,7 +265,11 @@ try {
   const rlogs = []
   const reader = startGrantReader({ transport: 'mcp', mcpUrl: url, creds: creds2, allowedPublishers: DIRECTORS, intervalMs: 3_600_000, log: l => rlogs.push(l) })
   const deadline = Date.now() + 10_000
-  while (Date.now() < deadline && creds2.get('google')?.source !== 'grant') await sleep(150)
+  // Wait for the WHOLE boot sweep to settle, not just the credential flip: the
+  // flip happens mid-sweep, but the ENV FALLBACK line rides the sweep promise's
+  // .then — asserting on it after stop() was a scheduler race (#40).
+  const swept = () => creds2.get('google')?.source === 'grant' && rlogs.some(l => l.includes('ENV FALLBACK in force'))
+  while (Date.now() < deadline && !swept()) await sleep(150)
   reader.stop()
   assert.equal(creds2.get('google')?.value, 'google-key-value', 'boot sweep loaded the credential over MCP')
   assert.equal(creds2.get('google')?.source, 'grant', 'source grant — same semantics end to end')
