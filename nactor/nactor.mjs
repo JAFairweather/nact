@@ -36,6 +36,7 @@ import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
 import { ngageDelivery } from './ngage-delivery.mjs'
+import { approvalPathOf, healCovers } from '../lib/routing.mjs'
 import { McpGrantClient } from './mcp-grant-client.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
@@ -425,15 +426,23 @@ function ensureChannels(cfg) {
   }
   // 3) backfill purpose on any channel that predates the field
   for (const ch of cfg.channels) { const p = channelPurpose(ch); if (ch.purpose !== p) { ch.purpose = p; changed = true } }
-  // 4) APPROVAL channels reach EVERY identity (self-heal drift); comms stay
-  // owner-only. To stop an identity acting, deactivate/revoke it — not unwiring.
+  // 4) BOX-path approval channels reach every keyed identity (self-heal
+  // drift); comms stay owner-only. The DIRECTOR path is NEVER backfilled —
+  // membership there follows key custody, not this sweep (#42: the old
+  // every-channel version stuffed all identities into a fresh Ngage channel).
+  // To stop an identity acting, deactivate/revoke it — not unwiring.
   const universe = Object.keys(IDS)
   for (const ch of cfg.channels) {
-    if (channelPurpose(ch) !== 'approval') continue
+    if (channelPurpose(ch) !== 'approval' || approvalPathOf(ch) !== 'box') continue
     const cur = new Set(ch.covers || [])
     for (const id of universe) if (!cur.has(id)) { cur.add(id); changed = true }
     ch.covers = [...cur]
   }
+  // 5) heal the pre-#42 pollution in BOTH directions: box identities out of
+  // director-path covers, keyless (director-signed) identities out of box
+  // covers. Custody decides; the config converges on the next load.
+  const signerOf = k => cfg.identitiesMeta?.[k]?.signer || 'custodial'
+  if (healCovers(cfg.channels, signerOf)) changed = true
   return changed
 }
 
