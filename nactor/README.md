@@ -73,13 +73,17 @@ Auth: `Authorization: Nostr <base64 kind-27235 event>` signed by a **Director's*
 key, pinning the method + URL path (+ sha256 of the body). The effective Director
 set is the bootstrap anchor ∪ `config.directors`. See `nip98.mjs`.
 
-**Director-path delivery prerequisite (nact#37):** raised drafts are authored by
-the **Nactor's own key**, so the Director's Ngage **Settings → allowlist must
-carry `nactorNpub`** (printed by `/api/health`) — Ngage's desk admits first-hand
-drafts from allowlisted authors only. The identity's Ngage channel must also name
-the Director's npub in its **Director** field; that npub is the grantee the draft
-is gift-wrapped to. There is no approval callback on this path — the Director's
-signature, in his own client, **is** the enactment (AD-10).
+**Director-path delivery prerequisite (nact#37, corrected per ngage#9):** raised
+drafts are authored by the **Nactor's own key**, so the Director's Ngage Settings
+must admit `nactorNpub` (printed by `/api/health`) — **as a Coordinator, never as
+a trusted agent/pen**. Ngage seals the Director's steering to its pens; listing
+the Nactor there would deliver his steering to a box-custodied key. The
+Coordinators list (ngage#9) admits its drafts with zero steering exposure — do
+not wire this up on an Ngage build that predates that split. The identity's
+Ngage channel must also name the Director's npub in its **Director** field; that
+npub is the grantee the draft is gift-wrapped to. There is no approval callback
+on this path — the Director's signature, in his own client, **is** the enactment
+(AD-10).
 
 ## Deploy (on the Nave platform)
 
