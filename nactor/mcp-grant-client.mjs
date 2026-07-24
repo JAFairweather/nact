@@ -181,6 +181,21 @@ export class McpGrantClient {
     return this.callTool('nvoy_scope_read', args)
   }
 
+  /** Director-path delivery (nact#39 / nvoy#28): mint one draft offer,
+   *  authored and signed by the key-holding service. Returns
+   *  { d, v, scope_name, granted_to }. */
+  async draftPublish({ granteeNpub, payload, scopeName } = {}) {
+    const args = { grantee_npub: granteeNpub, payload }
+    if (scopeName) args.scope_name = scopeName
+    return this.callTool('nvoy_draft_publish', args)
+  }
+
+  /** Withdraw an offer the service minted this session. Returns
+   *  { withdrawn, d, v }; unknown ids surface as McpToolError NVOY_UNKNOWN_DRAFT. */
+  async draftWithdraw(d) {
+    return this.callTool('nvoy_draft_withdraw', { d })
+  }
+
   /** Terminate the session (best-effort DELETE); safe to call repeatedly. */
   async close() {
     if (!this.#session) return
