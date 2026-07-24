@@ -23,9 +23,36 @@
 // first-hand drafts from allowlisted authors only.
 
 import { randomBytes } from 'node:crypto'
-import { nip19 } from 'nostr-tools'
+import { nip19, verifyEvent, getEventHash } from 'nostr-tools'
 import { approvalBindingOf, isDirectorPath } from '../lib/routing.mjs'
 import { newScopeKey, publishScope, grant, deleteScope } from './lib/nipxx.mjs'
+
+// The pen rule (nact#44, Director 2026-07-24): NOTHING reaches his desk that
+// didn't come from the identity's pen. The pen-direct lane (scribe signs the
+// scopes) proves itself; THIS lane is a courier, so every raise must carry a
+// PEN ATTESTATION — the draft JSON signed by the identity's own key, wherever
+// that key lives. The box verifies against the registered npub (it never needs
+// the key), embeds the attestation in the payload, and the desk re-verifies
+// independently and renders FROM the attested bytes (ngage#11). The kind is
+// arbitrary — the attestation rides inside the encrypted scope, never a relay.
+export const KIND_PEN_ATTEST = 24140
+
+// Verify a pen attestation against the identity's registered pubkey and
+// extract its draft core. Returns { ok, core } or { ok:false, code, error }.
+// NOTE the P4 lesson (channel-binding.mjs): this nostr-tools verifyEvent
+// checks the sig over the STORED id without recomputing the hash, so a lone
+// pen signature could be reused under swapped content — recompute and match.
+export function penVerdict(pen, expectedHex) {
+  if (!pen || typeof pen !== 'object' || typeof pen.sig !== 'string') {
+    return { ok: false, code: 403, error: "the pen rule: a director-path raise must carry `pen` — the draft JSON signed by the identity's own key. The box couriers; only the pen authors." }
+  }
+  if (getEventHash(pen) !== pen.id) return { ok: false, code: 403, error: 'pen attestation id does not match its content — signature reuse under swapped bytes, refused' }
+  if (!verifyEvent(pen)) return { ok: false, code: 403, error: 'pen attestation signature does not verify' }
+  if (pen.pubkey !== expectedHex) return { ok: false, code: 403, error: "pen attestation is signed by a different key than this identity's registered npub — not its pen" }
+  let core
+  try { core = JSON.parse(pen.content) } catch { return { ok: false, code: 422, error: 'pen attestation content is not a JSON draft' } }
+  return { ok: true, core }
+}
 
 // The single Ngage channel an identity's drafts raise through: its approval
 // binding, if that binding is an active director-path channel. Pure.
@@ -83,20 +110,38 @@ export function ngageDelivery({ sk, mcp, relay, config, onEvent = () => {} } = {
 
   // Raise a director-path proposal to the Director's desk. Returns
   // { ok:true, id, status:'raised-to-director', … } or { ok:false, code, error }.
-  async function raise({ identity, event, context } = {}) {
+  async function raise({ identity, event, context, pen } = {}) {
     const cfg = config()
     const meta = cfg?.identitiesMeta?.[identity]
     if (!meta || meta.signer !== 'director') return { ok: false, code: 400, error: `'${identity}' is not a director-path identity` }
     if ((meta.status || 'active') !== 'active') return { ok: false, code: 409, error: `'${identity}' is revoked` }
     if (!sk && !mcp) return { ok: false, code: 503, error: 'this runtime holds no NACTOR_NSEC and no mcp draft path — it cannot author draft grants (set NACT_MCP_URL under the mcp grant transport)' }
+    // The pen rule (nact#44): verify BEFORE anything else — an unpenned raise
+    // has no authority to check routing against, let alone touch a relay.
+    let penHex; try { penHex = nip19.decode(String(meta.npub || '')).data } catch { penHex = null }
+    if (typeof penHex !== 'string' || penHex.length !== 64) return { ok: false, code: 500, error: `'${identity}' has no registered npub to verify its pen against` }
+    const verdict = penVerdict(pen, penHex)
+    if (!verdict.ok) return verdict
     const ch = ngageChannelFor(cfg, identity)
     if (!ch) return { ok: false, code: 409, error: `'${identity}' has no Ngage approval path — bind it under the Ngage column in Routing first` }
     let grantee; try { grantee = nip19.decode(String(ch.approver || '')).data } catch { grantee = null }
     if (typeof grantee !== 'string' || grantee.length !== 64) {
       return { ok: false, code: 409, error: `the Ngage channel '${ch.name || ch.id}' names no Director npub — set its Director field` }
     }
-    const mapped = draftPayloadFrom({ event, context, proposedBy: meta.handle || identity })
+    // The ATTESTED bytes are the draft source — `event` is at most a cross-check
+    // (a caller whose event disagrees with its own pen is confused; refuse).
+    // `context` is deliberately NOT folded in: it is unpenned words.
+    if (event?.content && verdict.core?.text !== undefined && event.content !== verdict.core.text) {
+      return { ok: false, code: 422, error: 'event.content differs from the pen-attested text — the pen decides; drop event.content or re-sign' }
+    }
+    const mapped = draftPayloadFrom({
+      event: { kind: 1, content: typeof verdict.core?.text === 'string' ? verdict.core.text : '', tags: (Array.isArray(verdict.core?.hashtags) ? verdict.core.hashtags : []).map(t => ['t', String(t)]) },
+      context: typeof verdict.core?.rationale === 'string' ? verdict.core.rationale : undefined,
+      proposedBy: meta.handle || identity,
+    })
     if (!mapped.ok) return mapped
+    mapped.payload.pen = pen                          // the desk re-verifies this independently (ngage#11)
+    if (Number.isFinite(verdict.core?.proposedAt)) mapped.payload.proposedAt = verdict.core.proposedAt
 
     let scopeId, scopeName, acks = null
     if (sk) {
