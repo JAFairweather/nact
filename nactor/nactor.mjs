@@ -35,6 +35,8 @@ import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
+import { ngageDelivery } from './ngage-delivery.mjs'
+import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
 import { runMailVerb } from './connectors/mail.mjs'
 
@@ -331,6 +333,18 @@ function safeEqual(a, b) {
 
 const approval = webQueueApproval({ isDirector })
 const nact = new Nact({ identities: IDS, relays: RELAYS, approval })
+
+// The director-path (Ngage) delivery runtime — nact#37. Proposals for a keyless
+// `signer:'director'` identity never reach `nact` (there is no signer); they are
+// raised to the Director's desk as NIP-DA draft grants, authored by NACTOR's own
+// key. Lazy relay: only built if a director-path proposal ever arrives.
+let _ngageRelay = null
+const ngage = ngageDelivery({
+  sk: NACTOR_SK,
+  relay: { publish: ev => (_ngageRelay ??= new LiveRelay(RELAYS)).publish(ev), query: f => (_ngageRelay ??= new LiveRelay(RELAYS)).query(f) },
+  config: () => config,
+  onEvent: recordGrantEvent,
+})
 
 // ---- config store (non-secret metadata the app edits) --------------------
 // Config carries the Director(s) and the Nactor's own address alongside the
@@ -728,13 +742,30 @@ const server = createServer(async (req, res) => {
         channels: [...config.channels, ...derivedCommsChannels(config.channels)],
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
+        raised: ngage.listRaised(),                        // director-path drafts on his desk (nact#37)
         history: runtimeAudit(),
         entitlements: Object.fromEntries(idEntities().map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
       })
     }
     if (path === '/api/propose' && req.method === 'POST') {
+      // Director-path identities fork BEFORE the enact pipeline: no signer
+      // exists for them, so the draft is raised to the Director's Ngage desk
+      // instead (nact#37). Everything else takes the box gate unchanged.
+      if (config.identitiesMeta?.[body.identity]?.signer === 'director') {
+        const out = await ngage.raise({ identity: body.identity, event: body.event, context: body.context })
+        return out.ok ? json(res, 200, { id: out.id, status: out.status, scopeName: out.scopeName, grantee: out.grantee, relays: out.relays })
+                      : json(res, out.code || 500, { error: out.error })
+      }
       const out = await nact.propose({ identity: body.identity, event: body.event, context: body.context, replyTo: body.replyTo })
       return json(res, 200, out)
+    }
+    // Take back a raised director-path draft: tombstone its scope, so the desk
+    // shows it withdrawn and it can never be signed. Director-gated like every
+    // mutating route (we are inside the isDirector guard).
+    if (path === '/api/withdraw' && req.method === 'POST') {
+      const out = await ngage.withdraw(String(body.scopeId || body.id || ''))
+      return out.ok ? json(res, 200, { ok: true, id: out.id, status: out.status })
+                    : json(res, out.code || 500, { error: out.error })
     }
     if (path === '/api/enact' && req.method === 'POST') {
       const out = await nact.enact({ id: body.id, verb: body.verb === 'ok' || body.verb === 'enacted' ? 'ok' : 'no', approver: pubkey, confirm: body.confirm === true })

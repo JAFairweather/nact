@@ -63,14 +63,23 @@ everything else (add a co-Director, repoint the address) is edited from the app.
 | --- | --- | --- |
 | GET | `/api/health` | liveness; identity names, `directorsConfigured`, **`nactorNpub`** (the grantee address); **no secrets, no auth** |
 | GET | `/api/state` | `directors`, `nactorAddress`, `nactorNpub`, identities (npub/signer/status/**source**), **credentials** (names/types only), channels, tiers, queue, history |
-| POST | `/api/propose` | `{identity, event:{kind,content,tags}, context}` → queue |
+| POST | `/api/propose` | `{identity, event:{kind,content,tags}, context}` → queue. A **director-path** identity forks before the queue: its draft is **raised to the Director's Ngage desk** as a NIP-DA `draft:post/*` grant (kind-1 only; nact#37) |
 | POST | `/api/enact` | `{id, verb}` → sign the frozen bytes + broadcast, or reject |
+| POST | `/api/withdraw` | `{scopeId}` → tombstone a raised director-path draft; his desk shows it withdrawn |
 | PUT | `/api/config` | `{directors?, nactorAddress?, channels?, tiers?, identitiesMeta?}` → persist (refuses to remove the last Director) |
 | PUT | `/api/credential` | `{name, type, enc}` (NIP-44 ciphertext to `nactorNpub`) → decrypt in memory; a `role-key` becomes a signing identity. `{name, revoke:true}` to forget. **Values never touch disk or any response.** |
 
 Auth: `Authorization: Nostr <base64 kind-27235 event>` signed by a **Director's**
 key, pinning the method + URL path (+ sha256 of the body). The effective Director
 set is the bootstrap anchor ∪ `config.directors`. See `nip98.mjs`.
+
+**Director-path delivery prerequisite (nact#37):** raised drafts are authored by
+the **Nactor's own key**, so the Director's Ngage **Settings → allowlist must
+carry `nactorNpub`** (printed by `/api/health`) — Ngage's desk admits first-hand
+drafts from allowlisted authors only. The identity's Ngage channel must also name
+the Director's npub in its **Director** field; that npub is the grantee the draft
+is gift-wrapped to. There is no approval callback on this path — the Director's
+signature, in his own client, **is** the enactment (AD-10).
 
 ## Deploy (on the Nave platform)
 
