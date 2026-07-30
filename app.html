@@ -152,6 +152,7 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
     "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
     "nave-connect": "./lib/nave-connect.mjs?v=2",
     "nave-titlebar": "./lib/nave-titlebar.mjs?v=2",
+    "nave-login": "./lib/nave-login.mjs?v=1",
     "nact-routing": "./lib/routing.mjs?v=3"
   }
 }
@@ -374,6 +375,29 @@ async function signOut(){
   setSignedOut(); draw();
 }
 
+// The signed-OUT surface: the shared Nave login card (components/nave-login.mjs),
+// gold via this app's --accent. It owns the layout; we wire its buttons to the
+// SAME proven sign-in flows the titlebar's Sign-in used — signer logic unchanged.
+function showLogin(){
+  const view=document.getElementById('view');
+  const tabs=document.getElementById('tabs'), banner=document.getElementById('banner');
+  if(tabs) tabs.style.display='none';
+  if(banner) banner.style.display='none';
+  if(!(window.__nact && window.__nact.login)){ view.innerHTML='<div class="empty">Sign-in module still loading — reload.</div>'; return; }
+  const st=(m,k)=>window.__nact.login.status(view,m,k);
+  const fail=e=>{ SIGNER=null; st((e&&e.message)||'Connect failed','error'); };
+  window.__nact.login.render(view, {
+    appName:'Nact · Control Plane', tagline:'Sign in as Director', sealSvg:window.__nact.login.seal,
+    blurb:'Connect as a Director to reach Nactor behind the NIP-98 gate. Your key never enters this page.',
+    primaryLabel:'Sign in with your extension', signerNote:'works with any NIP-07 signer — Alby · nos2x',
+    nostrConnectLabel:'Connect a remote signer (nsec.app)',
+    bunkerPlaceholder:'bunker://… from your remote signer (nsec.app)',
+    bunkerNote:'NIP-46 remote signing — pair once; the key never enters this browser.',
+    onExtension: async()=>{ try{ if(!window.nostr) throw new Error('No browser extension (window.nostr). Install Alby or nos2x and reload.'); st('Waiting for your extension…'); SIGNER=await window.__nact.extension(); await goneLive(); }catch(e){ fail(e); } },
+    onNostrConnect: async()=>{ try{ st('Generating a pairing link…'); SIGNER=await window.__nact.nostrConnect((uri)=>st('In nsec.app: Connect app → paste:\n\n'+uri),(m)=>st(m)); await goneLive(); }catch(e){ fail(e); } },
+    onBunker: async(uri)=>{ if(!uri.startsWith('bunker://')){ st('Paste a bunker:// string from your signer.','error'); return; } try{ st('Connecting to your signer…'); SIGNER=await window.__nact.bunker(uri,(u)=>st('Approve in your signer: '+u)); await goneLive(); }catch(e){ fail(e); } },
+  });
+}
 const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
 const esc = s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 // Faithful WYSIWYS render (nact#8): escape, then REVEAL what your eyes can't see
@@ -437,6 +461,9 @@ function proposalCard(p){
   </div>`;
 }
 function draw(){
+  if(!LIVE){ showLogin(); return; }
+  const tabs=document.getElementById('tabs'), banner=document.getElementById('banner');
+  if(tabs) tabs.style.display=''; if(banner) banner.style.display='';
   renderTabs();
   const v=document.getElementById('view'); let h='';
   if(tab==='queue'){
@@ -782,6 +809,7 @@ else {
 import { nip07Signer, nip46Signer, nostrConnectSigner,
          serializeSession, parseSession } from 'nave-connect';
 import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
+import { renderLogin, setLoginStatus } from 'nave-login';
 import * as routing from 'nact-routing';
 import { SimplePool, nip19 } from 'nostr-tools';
 
@@ -798,6 +826,7 @@ const REMEMBER = 'nact.session';   // same `remember` slot shape the other apps 
 
 window.__nact = window.__nact || {};
 window.__nact.titlebar = { render: renderTitlebar, update: updateTitlebar, seal: SEAL };
+window.__nact.login = { render: renderLogin, status: setLoginStatus, seal: SEAL };   // shared sign-in card (components/nave-login.mjs)
 window.__nact.routing = routing;   // the AD-10 approval-path model (tested in lib/routing.test.mjs)
 
 // The three sign-in methods, all returning nave-connect's uniform signer shape
