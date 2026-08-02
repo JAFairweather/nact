@@ -727,6 +727,42 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // PROPOSE sits ABOVE the Director guard on purpose (nact#50). The whole premise is "the agent
+    // proposes, you enact it by signing" — and while this route was Director-only, the agent could
+    // not do the proposing. A Director proposing to themselves and then enacting it is one human
+    // acting twice; the human-in-the-loop property only means something when the two roles are
+    // held by different parties. Same admission rule as /api/broker and /api/connector/mail.
+    //
+    // A proposal is inert: it is an UNSIGNED draft that does nothing until a Director signs it.
+    // That is what makes widening this safe where widening /api/enact would not be.
+    //
+    // The binding that matters: a non-Director may propose ONLY AS ITSELF. Without it, any
+    // activated identity could lodge drafts attributed to another — the Director would read a
+    // truthful-looking "identity X proposes…" that X never said, and the queue's attribution
+    // would be worthless. Directors keep proposing for anyone: that is the Ngage director-path
+    // below, where the Director is acting in their own hand anyway.
+    if (path === '/api/propose' && req.method === 'POST') {
+      if (!isDirector(pubkey)) {
+        if (!activatedPubs().has(pubkey)) {
+          return json(res, 403, { error: 'caller is not a Director or an activated identity' })
+        }
+        const own = idEntities().find(id => id.pub === pubkey)?.name || null
+        if (!own || String(body.identity || '') !== own) {
+          return json(res, 403, { error: 'an activated identity may only propose as itself' })
+        }
+      }
+      // Director-path identities fork BEFORE the enact pipeline: no signer
+      // exists for them, so the draft is raised to the Director's Ngage desk
+      // instead (nact#37). Everything else takes the box gate unchanged.
+      if (config.identitiesMeta?.[body.identity]?.signer === 'director') {
+        const out = await ngage.raise({ identity: body.identity, event: body.event, context: body.context, pen: body.pen })
+        return out.ok ? json(res, 200, { id: out.id, status: out.status, scopeName: out.scopeName, grantee: out.grantee, relays: out.relays })
+                      : json(res, out.code || 500, { error: out.error })
+      }
+      const out = await nact.propose({ identity: body.identity, event: body.event, context: body.context, replyTo: body.replyTo })
+      return json(res, 200, out)
+    }
+
     if (!isDirector(pubkey)) return json(res, 403, { error: 'not a Director' })
     if (path === '/api/identity' && req.method === 'POST') {
       // Register a DIRECTOR-PATH (Ngage) identity: keyless, npub-only. Nactor
@@ -765,18 +801,6 @@ const server = createServer(async (req, res) => {
         history: runtimeAudit(),
         entitlements: Object.fromEntries(idEntities().map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
       })
-    }
-    if (path === '/api/propose' && req.method === 'POST') {
-      // Director-path identities fork BEFORE the enact pipeline: no signer
-      // exists for them, so the draft is raised to the Director's Ngage desk
-      // instead (nact#37). Everything else takes the box gate unchanged.
-      if (config.identitiesMeta?.[body.identity]?.signer === 'director') {
-        const out = await ngage.raise({ identity: body.identity, event: body.event, context: body.context, pen: body.pen })
-        return out.ok ? json(res, 200, { id: out.id, status: out.status, scopeName: out.scopeName, grantee: out.grantee, relays: out.relays })
-                      : json(res, out.code || 500, { error: out.error })
-      }
-      const out = await nact.propose({ identity: body.identity, event: body.event, context: body.context, replyTo: body.replyTo })
-      return json(res, 200, out)
     }
     // Take back a raised director-path draft: tombstone its scope, so the desk
     // shows it withdrawn and it can never be signed. Director-gated like every
