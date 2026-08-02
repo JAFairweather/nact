@@ -13,6 +13,20 @@ const KINDS = {
   1059:  { label: 'Gift wrap',                risk: 'elevated' },
   9734:  { label: 'Zap request',              risk: 'elevated' },
   10002: { label: 'Relay list — REPLACES your relays', risk: 'critical' },
+  // NIP-DA (draft, nostr-protocol/nips#2411). These already reached the queue through the
+  // unknown-kind fallback, which is conservative about RISK and useless about MEANING: a Director
+  // saw "kind 440" and had to know the protocol to guess it lets a stranger into a walled
+  // community. On an approval surface the label IS the safety property — "exactly what you are
+  // about to sign" is not satisfied by a bare number. These kinds are provisional (Marmot 44x
+  // band; fiatjaf typically renumbers at merge), so this is a mapping to revise, not a constant.
+  //
+  // The grant/revoke asymmetry is deliberate. GRANTING is critical because it is irreversible in
+  // the way that matters: revoking later stops future access but cannot un-see what was already
+  // read. REVOKING is elevated because it fails closed and is undone by re-issuing.
+  440:   { label: 'NIP-DA grant — GIVES a key access you control', risk: 'critical' },
+  441:   { label: "NIP-DA revocation — REMOVES a key's access",    risk: 'elevated' },
+  10440: { label: 'NIP-DA grant index — REPLACES the live grant list', risk: 'critical' },
+  30440: { label: "NIP-DA data set — REPLACES the scope's contents",   risk: 'critical' },
 }
 
 // Zero-width, bidi override/isolate, word-joiner, BOM, soft-hyphen — characters
