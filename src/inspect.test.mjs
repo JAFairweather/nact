@@ -29,6 +29,51 @@ t('a critical kind pushes a verify-carefully warning to the front', () => {
   assert.match(rep.warnings[0], /high-impact, verify carefully/)
 })
 
+// ---- NIP-DA grants ---------------------------------------------------------
+// These reached the queue before this mapping existed, via the unknown-kind fallback: correctly
+// conservative about risk, and rendered as the bare string "kind 440". The defect was never the
+// tier — it was that a Director could not tell what they were approving. So these assertions are
+// about MEANING as much as risk, and a label that reverts to the fallback must fail here.
+t('a NIP-DA grant is critical and says what it does', () => {
+  const ki = kindInfo(440)
+  assert.equal(ki.risk, 'critical')
+  assert.notEqual(ki.label, 'kind 440')               // the fallback label IS the defect
+  assert.match(ki.label, /grant/i)
+  assert.match(ki.label, /GIVES/)                     // names the direction, as kind 3 and 10002 do
+})
+t('revoking is elevated, not critical — the asymmetry is deliberate', () => {
+  // Granting cannot be undone in the way that matters: a later revoke stops future access but
+  // cannot un-see what was already read. Revoking fails closed and is undone by re-issuing. If
+  // these two ever read the same, the ranking has lost the distinction it exists to make.
+  assert.equal(kindInfo(441).risk, 'elevated')
+  assert.match(kindInfo(441).label, /REMOVES/)
+  assert.notEqual(kindInfo(440).risk, kindInfo(441).risk)
+})
+t('the NIP-DA index and data set are critical and labelled as replacing', () => {
+  assert.equal(kindInfo(10440).risk, 'critical')
+  assert.match(kindInfo(10440).label, /REPLACES/)
+  assert.equal(kindInfo(30440).risk, 'critical')
+  assert.match(kindInfo(30440).label, /REPLACES/)
+  // 30440 was already critical via the addressable range; what changed is that it no longer
+  // renders as a generic "Addressable list (kind 30440)".
+  assert.doesNotMatch(kindInfo(30440).label, /Addressable list/)
+})
+t('naming NIP-DA kinds did not drag ordinary kinds upward', () => {
+  // The paired direction. A mapping change that quietly promoted everything would satisfy every
+  // assertion above and leave the tier system meaningless.
+  assert.equal(kindInfo(1).risk, 'low')
+  assert.equal(kindInfo(7).risk, 'low')
+  assert.equal(kindInfo(9734).risk, 'elevated')
+  assert.equal(kindInfo(99999).risk, 'elevated')      // the fallback still applies to real unknowns
+})
+t('a grant proposal surfaces the verify-carefully warning first', () => {
+  const rep = inspect({ kind: 440, tags: [['p', 'a'.repeat(64)], ['da-cap', 'admit']], content: '' })
+  assert.equal(rep.risk, 'critical')
+  assert.match(rep.warnings[0], /high-impact, verify carefully/)
+  assert.match(rep.kindLabel, /grant/i)
+  assert.ok(rep.notableTags.some(x => /\(p\)/.test(x)))   // the grantee rides in a p tag
+})
+
 // ---- hidden / bidi characters ----------------------------------------------
 t('zero-width and bidi characters in content are flagged', () => {
   const rep = inspect({ kind: 1, tags: [], content: 'hello​world‮ reversed' })
