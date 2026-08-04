@@ -202,14 +202,17 @@ console.log('✓ non-Director publisher cannot mint entitlements');
 const a2creds = new Map()
 const a2ents = new Map()
 const a2Events = []
+const a2Logs = []
 let oScopeId = 'own-gg', oGen = 1, oKey = newScopeKey()
 await publishScope(relay, dir, { scopeId: oScopeId, generation: oGen, scopeKey: oKey, payload: { value: 'owner-google-key' } })
 await grant(relay, dir, lukePub, { scopeId: oScopeId, generation: oGen, scopeKey: oKey, scopeName: 'credential:google' })
-let a2 = await syncIdentityEntitlements({ relay, identities: ids, entitlements: a2ents, creds: a2creds, allowedPublishers: DIRECTORS, onEvent: ev => a2Events.push(ev) })
+let a2 = await syncIdentityEntitlements({ relay, identities: ids, entitlements: a2ents, creds: a2creds, allowedPublishers: DIRECTORS, log: line => a2Logs.push(line), onEvent: ev => a2Events.push(ev) })
 assert.equal(a2creds.get('google')?.value, 'owner-google-key', 'owner grant supplied the value')
 assert.equal(a2creds.get('google')?.source, 'grant-owner', 'tagged grant-owner')
 assert.equal(a2creds.get('google')?.owner, 'luke', 'owner recorded')
 assert.ok(a2Events.some(e => e.t === 'grant-load' && e.owner === 'luke' && e.credential === 'google'), 'owner-tagged grant-load audit event')
+assert.ok(a2Logs.some(line => line.includes('owner-values: [google←luke]')), 'non-secret sweep log proves owner value sourcing')
+assert.ok(a2Logs.every(line => !line.includes('owner-google-key')), 'sweep log never prints the credential value')
 console.log('✓ A2: owner grant supplies the value into CREDS (grant-owner, owner recorded)');
 
 // 10b) Steady-state owner re-sweep: no new audit events.
