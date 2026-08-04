@@ -424,7 +424,11 @@ export async function syncIdentityEntitlements({ relay, relayUrls, identities, e
     if (owned) try { own.close() } catch {}
   }
   const line = Object.entries(summary).map(([n, cs]) => `${n}:[${cs.join(',') || '—'}]`).join(' ')
-  if (line) log(`  entitlements: ${line}`)
+  // This is the operator's safe A2 cutover proof. Names and owning identities
+  // are non-secret; values never enter the log. An entitlement alone is not
+  // enough to revoke a Nactor-addressed fallback—the owner's scope must also
+  // have supplied a decryptable value and won precedence in CREDS.
+  if (line) log(`  entitlements: ${line} · owner-values: [${ownerLoaded.join(',') || '—'}]`)
   if (ownerLoaded.length) summary['creds-from-owner'] = ownerLoaded
   return summary
 }
