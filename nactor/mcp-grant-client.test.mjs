@@ -110,6 +110,26 @@ const nactor = generateSecretKey()               // Nactor's identity — held b
 const nactorPub = getPublicKey(nactor)
 const DIRECTORS = new Set([dirPub])
 
+// Duplicate-live diagnostics must ignore severed history while still warning
+// when two genuinely active scopes carry the same credential name (#53).
+const duplicateLogs = []
+await syncCredentialGrantsMcp({
+  client: {
+    listGrants: async () => [
+      { d: 'retired', author_npub: nip19.npubEncode(dirPub), scope_name: 'credential:probe', status: 'revoked-detected' },
+      { d: 'active-a', author_npub: nip19.npubEncode(dirPub), scope_name: 'credential:probe', status: 'active' },
+      { d: 'active-b', author_npub: nip19.npubEncode(dirPub), scope_name: 'credential:probe', status: 'active' },
+    ],
+    readScope: async d => ({ data: { value: d }, v: 1 }),
+  },
+  creds: new Map(), allowedPublishers: DIRECTORS, log: line => duplicateLogs.push(line),
+})
+assert.equal(duplicateLogs.filter(line => line.includes('two live scopes')).length, 1,
+  'only the two active same-name scopes produce a duplicate-live warning')
+assert.ok(duplicateLogs[0].includes('(active-a, active-b)') && !duplicateLogs[0].includes('retired'),
+  'the warning names active scopes only, never revoked history')
+console.log('✓ reader (mcp): duplicate-live warning excludes revoked same-name history')
+
 // credential:telegram-luke — the pilot credential
 const tgScope = 'cred-tglk'
 const tgKey = newScopeKey()
