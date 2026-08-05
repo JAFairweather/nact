@@ -189,7 +189,7 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
     grants = grants.filter(g => { const hex = npubToHex(g.author_npub); return hex && trusted.has(hex) })
     summary.untrusted = before - grants.length
   }
-  const seen = new Map()  // credential name → scope id, for the same-name warning
+  const seenActive = new Map()  // credential name → active scope id, for the same-name warning
   // Names with at least one ACTIVE grant in THIS listing. A severed scope may
   // share its credential name with a live re-issue (the console's supersede
   // pattern); severance must never clobber the sibling the same sweep loads —
@@ -207,8 +207,9 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
   for (const g of grants) {
     const name = (g.scope_name || '').slice(CREDENTIAL_PREFIX.length)
     if (!name) { summary.errors.push('empty credential name'); continue }
-    if (seen.has(name)) log(`  credential-grants: WARNING — two live scopes carry credential '${name}' (${seen.get(name)}, ${g.d}); no issuedAt on the MCP surface, last listed wins — rotate the superseded scope`)
-    seen.set(name, g.d)
+    const active = !g.status || g.status === 'active'
+    if (active && seenActive.has(name)) log(`  credential-grants: WARNING — two live scopes carry credential '${name}' (${seenActive.get(name)}, ${g.d}); no issuedAt on the MCP surface, last listed wins — rotate the superseded scope`)
+    if (active) seenActive.set(name, g.d)
     // The server already knows a severed grant: revoked-detected /
     // relinquished / expired never dereference, so treat the status like a
     // failed fetch on the relay path — drop only what WE loaded from a grant.
