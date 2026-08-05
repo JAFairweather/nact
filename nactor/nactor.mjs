@@ -61,10 +61,20 @@ const BOOTSTRAP = toPub(process.env.NACT_DIRECTOR_NPUB || process.env.NACT_MASTE
 // Role identities from env: every <NAME>_NSEC → identity <name>. These are the
 // bootstrap FALLBACK; the migration (docs/migration.md) replaces them with role
 // keys imported at runtime as credential-scopes, held only in memory.
+// The env-var NAME is a custody locator, not an identity. The IDENTITY is the pubkey, derived
+// here once so every consumer joins on it (AD-12: the join key is the lowercase hex pubkey,
+// everywhere). Keying agents by `<NAME>_NSEC` lowercased is why an agent could exist in the
+// delegator's registry — which keys on pubkey — and be invisible here, with no code anywhere
+// able to join the two.
 const IDS = {}
 for (const [k, v] of Object.entries(process.env)) {
   const m = /^([A-Z][A-Z0-9]*)_NSEC$/.exec(k)
-  if (m && k !== 'NACTOR_NSEC' && loadSecret(v)) IDS[m[1].toLowerCase()] = { nsec: v }
+  if (!m || k === 'NACTOR_NSEC') continue
+  const sk = loadSecret(v)
+  if (!sk) continue
+  let pub = null
+  try { pub = getPublicKey(sk) } catch {}
+  IDS[m[1].toLowerCase()] = { nsec: v, pub, ref: k }
 }
 
 // Nactor's OWN keypair — the grantee. A Director encrypts credential-scopes TO
@@ -188,12 +198,38 @@ const isDirector = pub => directorPubs().has(pub)
 // credentials — so a box service signing NIP-98 as `luke` can reach the broker,
 // but only because you authorized `luke` by signature.
 function activatedPubs() {
-  const set = new Set()
-  for (const name of Object.keys(config?.activations || {})) {
-    const nsec = IMPORTED.get(name)?.nsec ?? IDS[name]?.nsec
-    try { if (nsec) set.add(getPublicKey(loadSecret(nsec))) } catch {}
+  // Activations are keyed by PUBKEY now, so this is the identity function rather than a
+  // name→key lookup that could silently miss. Legacy name-keyed entries are migrated once at
+  // load (migrateActivationKeys), so nothing here has to tolerate both shapes.
+  return new Set(Object.keys(config?.activations || {}).filter(k => /^[0-9a-f]{64}$/.test(k)))
+}
+
+/** The pubkey for an on-box identity name, or null when its key is absent or unparseable. */
+function pubOf(name) {
+  const rec = IMPORTED.get(name) ?? IDS[name]
+  if (rec?.pub) return rec.pub
+  try { return rec?.nsec ? getPublicKey(loadSecret(rec.nsec)) : null } catch { return null }
+}
+
+/**
+ * One-time migration: activations were keyed by the env-var-derived NAME, which is not an
+ * identity. Re-key by pubkey, and keep any entry whose key cannot be resolved rather than
+ * dropping it — a Director's signed consent is not ours to discard because we cannot currently
+ * see the key it names.
+ */
+function migrateActivationKeys(cfg) {
+  const acts = cfg?.activations
+  if (!acts) return false
+  let changed = false
+  for (const [k, v] of Object.entries(acts)) {
+    if (/^[0-9a-f]{64}$/.test(k)) continue          // already a pubkey
+    const pub = pubOf(k)
+    if (!pub) { if (!v.orphanedName) { acts[k] = { ...v, orphanedName: k }; changed = true } ; continue }
+    acts[pub] = { ...v, migratedFromName: k }
+    delete acts[k]
+    changed = true
   }
-  return set
+  return changed
 }
 
 // Broker providers. The caller supplies the path/method/body; Nactor pins the
@@ -366,8 +402,31 @@ const ngage = ngageDelivery({
 // is canonical for verification. NACTJAF_NSEC yields key `nactjaf`, but the
 // identity is published as `nact_jaf@nave.pub` — map it so the plane shows the
 // real, verifiable handle.
-const HANDLE_OVERRIDES = { nactjaf: 'nact_jaf@nave.pub' }
-const defaultHandle = k => HANDLE_OVERRIDES[k] || `${k}@nave.pub`
+// The auto-derived handle. There used to be a HANDLE_OVERRIDES map here —
+// `{ nactjaf: 'nact_jaf@nave.pub' }` — a hand-maintained patch for ONE identity whose real NIP-05
+// does not match its env-var name. It existed only because the name was being treated as the
+// identity; with the pubkey as the join key, a handle is data about an identity and belongs in
+// config, not in a constant that has to be edited when a fleet gains a member.
+//
+// LEGACY_HANDLES is migration input, consumed once into identitiesMeta and never read again. It
+// is not a fallback: deleting the map outright would have silently changed a displayed handle,
+// which is a worse outcome than the patch it replaces.
+const LEGACY_HANDLES = { nactjaf: 'nact_jaf@nave.pub' }
+const defaultHandle = k => `${k}@nave.pub`
+
+/** One-time: move a legacy hardcoded handle into the config that should have held it. */
+function migrateLegacyHandles(cfg) {
+  let changed = false
+  cfg.identitiesMeta = cfg.identitiesMeta || {}
+  for (const [name, handle] of Object.entries(LEGACY_HANDLES)) {
+    const meta = cfg.identitiesMeta[name]
+    if (!meta) continue                                    // not on this box; nothing to migrate
+    if (meta.handle && meta.handle !== defaultHandle(name)) continue   // already customised
+    cfg.identitiesMeta[name] = { ...meta, handle }
+    changed = true
+  }
+  return changed
+}
 
 // Channels have a PURPOSE:
 //  • 'approval' — where an agent's proposals go to be GATED before they enact.
@@ -464,7 +523,12 @@ function loadConfig() {
   cfg = cfg || defaultConfig()
   // Derive approvals-credential channels and self-heal universal-channel coverage
   // (web queue + approvals bots reach every on-box identity). Persist if changed.
-  if (ensureChannels(cfg)) { try { saveConfig(cfg) } catch (e) { console.warn('config save (channels):', e.message) } }
+  // Migrations run before anything reads the config, and persist together with the channel
+  // self-heal so a box converges in one write rather than on the next unrelated save.
+  let migrated = ensureChannels(cfg)
+  if (migrateLegacyHandles(cfg)) migrated = true
+  if (migrateActivationKeys(cfg)) migrated = true
+  if (migrated) { try { saveConfig(cfg) } catch (e) { console.warn('config save (migrations):', e.message) } }
   return cfg
 }
 function saveConfig(c) {
@@ -485,14 +549,19 @@ async function identitiesView() {
     let npub = null
     try { npub = nip19.npubEncode(getPublicKey(loadSecret(nsec))) } catch {}
     const meta = config.identitiesMeta[k] || {}
-    // Prefer an explicit custom handle, but if the persisted handle is just the
-    // auto-derived `<key>@nave.pub`, apply the canonical override instead.
-    const handle = (meta.handle && meta.handle !== `${k}@nave.pub`) ? meta.handle : defaultHandle(k)
+    const handle = meta.handle || defaultHandle(k)
+    const pub = pubOf(k)
     out.push({
-      key: k, handle, npub,
+      // `pub` is the JOIN KEY (AD-12). `key` stays as the custody locator — which env slot holds
+      // the secret — because that is what an operator needs in order to find or rotate it, and it
+      // is no longer pretending to be the identity.
+      pub, key: k, handle, npub,
+      custody: { mode: meta.signer || 'custodial', ref: IDS[k]?.ref || null },
       signer: meta.signer || 'custodial', status: meta.status || 'active',
       source: IMPORTED.has(k) ? 'imported (credential-scope, in memory)' : 'env (bootstrap fallback)',
-      activated: (config.activations && config.activations[k]) || null,
+      // Activations are keyed by pubkey. An identity whose key cannot be derived cannot be
+      // matched to one, and reports null rather than borrowing a name-keyed entry.
+      activated: (pub && config.activations && config.activations[pub]) || null,
     })
   }
   // Director-path (Ngage) identities are KEYLESS — no on-box nsec, so they never
@@ -501,11 +570,16 @@ async function identitiesView() {
   // signs for them — the Director approves in his own hand via Ngage (AD-10).
   for (const [k, meta] of Object.entries(config.identitiesMeta || {})) {
     if (names.has(k) || meta.signer !== 'director') continue
+    // Keyless by design, but NOT identity-less: a director-path identity is registered by npub,
+    // so it has the same join key as anything else. It just has no custody ref.
+    let pub = null
+    try { pub = meta.npub ? nip19.decode(meta.npub).data : null } catch {}
     out.push({
-      key: k, handle: meta.handle || defaultHandle(k), npub: meta.npub || null,
+      pub, key: k, handle: meta.handle || defaultHandle(k), npub: meta.npub || null,
+      custody: { mode: 'director', ref: null },
       signer: 'director', status: meta.status || 'active',
       source: 'director-path — no on-box key; you sign via Ngage',
-      activated: null,
+      activated: (pub && config.activations && config.activations[pub]) || null,
     })
   }
   return out
@@ -532,8 +606,16 @@ function credentialsView() {
 // that's state; these are the timestamped events.
 function runtimeAudit() {
   const out = []
-  for (const [name, a] of Object.entries(config.activations || {})) {
-    if (a && a.at) out.push({ t: 'activated', identity: name, by: a.by || null, when: a.at })
+  // Activations are keyed by pubkey now, so the key is no longer a display name. Resolve it back
+  // to one — the live name if the key is still on the box, else the name recorded at activation
+  // time, else a short pubkey. Rendering raw hex where a name belongs would be a regression the
+  // re-keying does not require.
+  for (const [key, a] of Object.entries(config.activations || {})) {
+    if (!a || !a.at) continue
+    const live = Object.keys(IDS).find(n => IDS[n]?.pub === key)
+      || [...IMPORTED.keys()].find(n => pubOf(n) === key)
+    const identity = live || a.name || a.orphanedName || (key.length === 64 ? `${key.slice(0, 12)}…` : key)
+    out.push({ t: 'activated', identity, pub: key.length === 64 ? key : null, by: a.by || null, when: a.at })
   }
   for (const h of (approval.listHistory() || [])) {
     out.push({ t: 'enact', id: h.id, identity: h.identity, kindLabel: h.kindLabel, outcome: h.outcome, fingerprint: h.fingerprint, detail: h.detail, when: h.when })
@@ -876,10 +958,16 @@ const server = createServer(async (req, res) => {
       const known = new Set([...Object.keys(IDS), ...IMPORTED.keys()])
       if (!known.has(name)) return json(res, 404, { error: `no such on-box identity '${name}'` })
       if (!config.activations) config.activations = {}
-      if (body.deactivate) { delete config.activations[name]; saveConfig(config); return json(res, 200, { ok: true, deactivated: name, identities: await identitiesView() }) }
-      config.activations[name] = { by: nip19.npubEncode(pubkey), at: Date.now() }
+      // Keyed by the identity's PUBKEY, not its env-var name — otherwise every activation would
+      // re-introduce the very key the migration just removed.
+      const target = pubOf(name) || config.identitiesMeta?.[name]?.npub && (() => {
+        try { return nip19.decode(config.identitiesMeta[name].npub).data } catch { return null }
+      })()
+      if (!target) return json(res, 400, { error: `cannot resolve a pubkey for '${name}' — an identity is activated by key, and this one has no derivable key on the box and no registered npub` })
+      if (body.deactivate) { delete config.activations[target]; saveConfig(config); return json(res, 200, { ok: true, deactivated: name, identities: await identitiesView() }) }
+      config.activations[target] = { by: nip19.npubEncode(pubkey), at: Date.now(), name }
       saveConfig(config)
-      return json(res, 200, { ok: true, activated: name, by: config.activations[name].by, identities: await identitiesView() })
+      return json(res, 200, { ok: true, activated: name, pub: target, by: config.activations[target].by, identities: await identitiesView() })
     }
     return json(res, 404, { error: 'unknown endpoint' })
   } catch (e) {
