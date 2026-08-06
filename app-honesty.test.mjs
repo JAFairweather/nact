@@ -107,5 +107,26 @@ t('the section header class it uses actually exists in the stylesheet', () => {
   assert.match(src, /^\.sect\{/m, 'app.html uses <h2 class="sect"> — the rule must be defined')
 })
 
+// ── 4. external actuator approvals are one exact signature ──────────────────
+t('the console maps and renders external frozen-action proposals', () => {
+  assert.match(src, /S\.externalActions\s*=\s*\(st\.externalActions\s*\|\|\s*\[\]\)/)
+  assert.match(src, /externalActionCard/)
+  assert.match(src, /seal id \$\{esc\(p\.fingerprint\)\}/)
+})
+t('the Director signs the actuator URL, proposal id, fingerprint, and verb exactly once', () => {
+  const start = src.indexOf('async function decideExternal')
+  const body = src.slice(start, start + 1800)
+  assert.match(body, /JSON\.stringify\(\{proposal_id:p\.proposalId,fingerprint:p\.fingerprint,verb\}\)/)
+  assert.match(body, /SIGNER\.signEvent\(\{kind:27235/)
+  assert.match(body, /\['u',p\.approvalUrl\]/)
+  assert.equal((body.match(/SIGNER\.signEvent/g) || []).length, 1, 'one visible decision must require one signature')
+})
+t('the exact decision event authenticates its own endpoint without a second generic api signature', () => {
+  const start = src.indexOf('async function decideExternal')
+  const body = src.slice(start, start + 1800)
+  assert.match(body, /fetch\('\/api\/decide-external'/)
+  assert.doesNotMatch(body, /api\('POST','\/api\/decide-external'/)
+})
+
 console.log(`\n${pass}/${pass + fail} passed`)
 process.exit(fail ? 1 : 0)
