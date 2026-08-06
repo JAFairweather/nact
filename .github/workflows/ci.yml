@@ -1,0 +1,70 @@
+name: CI
+
+# Run the suite on every PR and on pushes to main.
+#
+# THIS REPO HAD NO WORKFLOWS AT ALL. Not a stale one, not a disabled one — none. `gh pr view --json
+# statusCheckRollup` returned `checks=none`, so the only gate on the act-side control plane was a
+# local run plus a human reading a diff.
+#
+# That matters more here than in most repos, because this plane's failure mode is silent. The bugs
+# #56 fixed were an npub built from `Math.random()` and pushed into state as an active identity, a
+# "Revoke authority" button with no API call behind it, and a `raised` field the API returned that the
+# console dropped. None of those crash. All three render as success. A suite is the only thing that
+# notices, and nothing was running the suite.
+#
+# Deliberately no suite count or roster here: package.json's `test` script is the only place that
+# knows it, and a restated count goes stale silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: npm test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22' # matches the deployed runtime
+          cache: npm
+
+      - name: Install from lockfile
+        run: npm ci --no-audit --no-fund
+
+      - name: Check out nvoy, for the cross-repo MCP contract
+        # nactor/mcp-grant-client.test.mjs drives the REAL nvoy MCP server over stdio — it is the only
+        # test anywhere that exercises the Nact↔Nvoy seam, which is the seam this whole plane depends
+        # on for credential grants. It hard-fails when the server is not built, and it should: skipping
+        # it would leave the contract unverified while the run stayed green.
+        #
+        # So CI builds it rather than dodging it. Both repos are public, so no token is needed. Pinned
+        # to main deliberately: this asserts nact works against nvoy AS DEPLOYED, and a red run here is
+        # real information — either nact broke or nvoy changed the contract under it.
+        uses: actions/checkout@v4
+        with:
+          repository: JAFairweather/nvoy
+          ref: main
+          path: .nvoy-for-ci
+
+      - name: Build the nvoy MCP server
+        # `npm ci` runs the prepare script, which builds mcp/dist/.
+        run: npm ci --no-audit --no-fund --prefix .nvoy-for-ci/mcp
+
+      - name: Test
+        # Side-effect-free: the suites drive pure modules (routing, tiers, wysiwys, grant reading) and
+        # assert over app.html's source. No relay is contacted and no key is required — every env var
+        # this repo reads (NACTOR_NSEC, NACT_CONFIG, NACT_PROXY_TOKEN, …) belongs to the runtime, not
+        # to the tests, and each suite builds its own fixtures.
+        env:
+          NVOY_REPO: ${{ github.workspace }}/.nvoy-for-ci
+        run: npm test
