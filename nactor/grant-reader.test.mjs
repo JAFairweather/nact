@@ -9,7 +9,8 @@ import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { publishScope, grant, rotateScope, newScopeKey } from './lib/nipxx.mjs'
 import { Relay } from './lib/relay.mjs'
 import { LocalRelay } from './lib/liverelay.mjs'
-import { syncCredentialGrants, syncIdentityEntitlements, envFallbackNames } from './grant-reader.mjs'
+import { syncCredentialGrants, syncIdentityEntitlements, syncChannelBindings, envFallbackNames } from './grant-reader.mjs'
+import { bindingGrantPayload, BINDING_SCOPE } from '../lib/channel-binding.mjs'
 
 const dir = generateSecretKey()                 // the Director (delegator/publisher)
 const dirPub = getPublicKey(dir)
@@ -240,6 +241,54 @@ s = await syncCredentialGrants({ relay, nactorSk: nactor, creds: a2creds, allowe
 assert.equal(a2creds.get('google')?.value, 'nactor-copy-key', 'Nactor-addressed copy restores supply on the next sweep')
 assert.equal(a2creds.get('google')?.source, 'grant', 'fallback tagged plain grant')
 console.log('✓ A2: owner revocation falls back to the Nactor-addressed copy (no gap)');
+
+// P4 live source — channel binding grants are a separate authority plane.
+const bindingSet = new Set()
+const bindingEvents = []
+const bindingKey = newScopeKey()
+await publishScope(relay, dir, {
+  scopeId: 'bind-tg', generation: 1, scopeKey: bindingKey,
+  payload: bindingGrantPayload({
+    director: dirPub, nactor: nactorPub, channelType: 'Telegram',
+    channelId: 'telegram:555', label: 'Nact approvals', nonce: 'ceremony', echoedAt: 1700000000,
+  }),
+})
+await grant(relay, dir, nactorPub, { scopeId: 'bind-tg', generation: 1, scopeKey: bindingKey, scopeName: BINDING_SCOPE })
+let b = await syncChannelBindings({ relay, nactorSk: nactor, bindings: bindingSet, allowedPublishers: DIRECTORS, onEvent: x => bindingEvents.push(x) })
+assert.equal(b.available, true, 'successful binding read is available')
+assert.deepEqual(b.channels, ['telegram:555'], 'valid Director binding feeds the live set')
+assert.ok(bindingEvents.some(e => e.t === 'channel-bind'), 'binding load is auditable')
+console.log('✓ channel binding grant → live verified channel set')
+
+// A foreign publisher may address the Nactor with a valid grant, but must not
+// become an approval authority.
+const evilBindingKey = newScopeKey()
+await publishScope(relay, mallory, {
+  scopeId: 'bind-evil', generation: 1, scopeKey: evilBindingKey,
+  payload: bindingGrantPayload({ director: 'mallory', nactor: nactorPub, channelType: 'Telegram', channelId: 'telegram:evil', nonce: 'x', echoedAt: 1700000000 }),
+})
+await grant(relay, mallory, nactorPub, { scopeId: 'bind-evil', generation: 1, scopeKey: evilBindingKey, scopeName: BINDING_SCOPE })
+b = await syncChannelBindings({ relay, nactorSk: nactor, bindings: bindingSet, allowedPublishers: DIRECTORS })
+assert.equal(b.untrusted, 1, 'foreign binding publisher counted')
+assert.deepEqual(b.channels, ['telegram:555'], 'foreign binding cannot add a channel')
+console.log('✓ non-Director binding ignored')
+
+// A successful read with no surviving grant is authoritative: rotation is the
+// revocation signal and removes the channel from the live set.
+await rotateScope(relay, dir, { scopeId: 'bind-tg', generation: 1, payload: { revoked: true }, scopeName: BINDING_SCOPE, survivors: [] })
+b = await syncChannelBindings({ relay, nactorSk: nactor, bindings: bindingSet, allowedPublishers: DIRECTORS, onEvent: x => bindingEvents.push(x) })
+assert.equal(b.available, true)
+assert.deepEqual(b.channels, [], 'revoked binding is removed after authoritative read')
+assert.ok(bindingEvents.some(e => e.t === 'channel-unbind'), 'binding revocation is auditable')
+console.log('✓ binding rotation revokes approval authority')
+
+// A relay outage is UNKNOWN, not an empty authoritative state. The prior set
+// remains available for diagnosis, but callers must not honor approvals.
+const failing = { query: async () => { throw new Error('relay unavailable') } }
+b = await syncChannelBindings({ relay: failing, nactorSk: nactor, bindings: new Set(['telegram:555']), allowedPublishers: DIRECTORS })
+assert.equal(b.available, false, 'relay outage marks binding state unknown')
+assert.deepEqual(b.channels, ['telegram:555'], 'outage does not masquerade as revocation')
+console.log('✓ relay outage is UNKNOWN and cannot silently authorize or revoke')
 
 console.log('\nGRANT-READER TESTS PASS — issue, read, live-update, revoke-drop, isolation,')
 console.log('Director-only trust, env-fallback flag, audit events, entitlement')
