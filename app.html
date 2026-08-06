@@ -168,7 +168,8 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
     "nave-connect": "./lib/nave-connect.mjs?v=2",
     "nave-titlebar": "./lib/nave-titlebar.mjs?v=2",
     "nact-routing": "./lib/routing.mjs?v=3",
-    "nact-actions": "./lib/actions.mjs?v=1"
+    "nact-actions": "./lib/actions.mjs?v=1",
+    "nact-registry": "./lib/registry.mjs?v=1"
   }
 }
 </script>
@@ -252,6 +253,15 @@ function mapState(st){
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
+  // The delegator's projected roster. `agents: null` is PRESERVED as null: mapping it to [] would turn
+  // "could not read" into "Nvoy knows nobody", which is the exact conflation the divergence rows exist
+  // to prevent.
+  S.registry = (st.registry && typeof st.registry==='object')
+    ? { agents: Array.isArray(st.registry.agents) ? st.registry.agents : null,
+        generatedAt: st.registry.generatedAt ?? null, generation: st.registry.generation ?? null,
+        stale: st.registry.stale ?? null, dropped: st.registry.dropped ?? 0, why: st.registry.why ?? null }
+    : { agents:null, generatedAt:null, generation:null, stale:null, dropped:0,
+        why:'this runtime reported no roster field at all — it predates the projection' };
   // `raised` was fetched and discarded here. Mapped defensively: an entry with no scopeId is not
   // addressable and is dropped rather than rendered as an unopenable card.
   S.raised=(st.raised||[]).filter(r=>r&&r.scopeId).map(r=>({scopeId:r.scopeId,identity:r.identity||'—',
@@ -762,7 +772,53 @@ function draw(){
   // it is an approval path (AD-10). So the roster moves under Agents, where the question it
   // answers — "who can approve for this identity" — is actually being asked. Ngage as a channel
   // TYPE lives in Channels. Appended to the Agents view rather than replacing it.
+  // ── THE DIVERGENCE ROWS ────────────────────────────────────────────────────
+  //
+  // The Director's original report was that some agents show in Nvoy and not here. The mechanism was
+  // fixed in #57 (both sides key on the hex pubkey) but the SYMPTOM was an absence, and an absence is
+  // the one defect nobody can see. This turns it into a row.
+  //
+  // The third state is the load-bearing one and it is why `registry.agents === null` is not treated as
+  // an empty set: when the projection was not read, every on-box key is `not verified`, never "known
+  // only to Nact". Claiming the latter would assert a fact about a store nobody queried.
   if(tab==='identities'){
+    const D = window.__nact?.registry;
+    if(D){
+      const reg = S.registry || {};
+      const d = D.diffRosters({ registry: reg.agents, box: S.identities.map(i=>window.__nact.toHex(i.npub)).filter(Boolean) });
+      const nameOf = (pub)=>{ const i=S.identities.find(x=>window.__nact.toHex(x.npub)===pub); return i?i.handle:null; };
+      const row = (pub, kind)=>`<div class="act-row">
+        <div>
+          <h3 style="font-size:14px">${esc(nameOf(pub) || (pub.slice(0,16)+'…'))}</h3>
+          <div class="kv">${esc(pub.slice(0,32))}…</div>
+          <div class="act-enforcer">${esc(D.divergenceNote(kind))}</div>
+        </div>
+        <div class="acts">${kind==='onlyRegistry'
+          ? '<span class="badge b-off" title="no key slot for this agent exists on this box">no key here</span>'
+          : kind==='onlyBox'
+            ? '<span class="badge b-off" title="a key exists here with no row in the Director\'s registry">unregistered</span>'
+            : '<span class="badge b-off" title="the roster projection was not read">not verified</span>'}</div>
+      </div>`;
+      const rows = [
+        ...d.onlyRegistry.map(p=>row(p,'onlyRegistry')),
+        ...d.onlyBox.map(p=>row(p,'onlyBox')),
+        ...d.unverified.map(p=>row(p,'unverified')),
+      ];
+      const age = reg.generatedAt ? new Date(reg.generatedAt*1000).toLocaleString() : null;
+      h += `<h2 class="sect">Both rosters — the join</h2>
+        <div class="hint" style="margin:0 0 10px">${d.registryKnown
+          ? `from the Director's roster projection${age?` · generated ${esc(age)}`:''}${reg.stale?' · <b>stale</b>':''}${reg.generation!==null?` · v${esc(String(reg.generation))}`:''}${reg.dropped?` · ${reg.dropped} projected row(s) unreadable`:''}
+             — a <b>copy</b>, not a live view.`
+          : `The roster projection was <b>not read</b>, so no divergence can be claimed either way.
+             ${reg.why?`<br>${esc(reg.why)}`:''}`}</div>
+        ${rows.length
+          ? `<div class="card">${rows.join('')}</div>`
+          : d.registryKnown
+            ? `<div class="empty">Both rosters agree: ${d.both.length} agent${d.both.length===1?'':'s'} in
+                 the Director's registry and on this box, and nothing on either side alone. This is the
+                 state the join is supposed to produce.</div>`
+            : `<div class="empty">No keys on this box to compare.</div>`}`;
+    }
     h += `<h2 class="sect">Directors — who approves</h2>`;
     h += `<div class="card">
       <h3>Directors</h3>
@@ -1079,6 +1135,7 @@ import { nip07Signer, nip46Signer, nostrConnectSigner,
 import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
 import * as routing from 'nact-routing';
 import * as ACTIONS from 'nact-actions';
+import * as REGISTRY_LIB from 'nact-registry';
 import { SimplePool, nip19 } from 'nostr-tools';
 
 const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;height:100%">
@@ -1158,6 +1215,9 @@ window.__nact.npubOf = async function(signer){
 // The durable-action-grant model, so the console and its tests share one implementation rather than
 // two descriptions of it — the same reason lib/tiers.mjs is shared with sign.html.
 window.__nact.actions = ACTIONS;
+// The divergence classifier, VENDORED from nvoy rather than restated — two planes describing one join
+// two ways is not one join (AD-11).
+window.__nact.registry = REGISTRY_LIB;
 
 // npub → lowercase hex. The join key is the hex pubkey everywhere (AD-12 ruling 1) and npub is
 // display only, so anything joining a queue row to a grant must convert rather than string-compare

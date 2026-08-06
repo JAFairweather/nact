@@ -45,6 +45,7 @@ import { nip19 } from 'nostr-tools'
 import { receiveGrants, latestGrants, fetchScope } from './lib/nipxx.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
 import { McpGrantClient, McpToolError } from './mcp-grant-client.mjs'
+import { readRegistry } from './registry-reader.mjs'
 
 export const CREDENTIAL_PREFIX = 'credential:'
 
@@ -283,11 +284,14 @@ export async function syncCredentialGrantsMcp({ client, creds, allowedPublishers
 // nsec lives with nvoy-mcp. Default stays 'relay' (the direct NIP-DA reader,
 // V1) until the box cutover proves the MCP path; the relay branch below is
 // byte-for-byte the pre-M7 behavior.
-export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {}, transport = 'relay', mcpUrl, mcpClient }) {
+export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {}, transport = 'relay', mcpUrl, mcpClient, onRegistry = null }) {
   if (transport === 'mcp') {
     if (!mcpClient && !mcpUrl) {
       const env = envFallbackNames(creds || new Map())
       log(`  credential-grants: reader disabled (transport mcp, no NACT_MCP_URL)${env.length ? ` — ENV FALLBACK in force for [${env.join(', ')}]` : ''}`)
+      // Say WHY the roster is unknown rather than leaving the console to infer it from silence.
+      onRegistry?.({ agents: null, why: 'the grant reader is disabled (transport mcp, no NACT_MCP_URL), '
+        + 'so this runtime has no path to the delegator\'s scopes' })
       return { stop() {} }
     }
     const client = mcpClient || new McpGrantClient({ url: mcpUrl })
@@ -303,16 +307,36 @@ export function startGrantReader({ relayUrls, nactorSk, creds, allowedPublishers
           : '  credential-grants: env fallback clear — every credential is grant-sourced')
       })
       .catch(e => log(`  credential-grants: sweep error ${e?.message || e}`))
-    sweep()                                   // boot read
-    const t = setInterval(sweep, intervalMs)  // periodic re-read (durability + revocation pickup)
+    // The agent-roster projection rides the SAME sweep, deliberately: same grant, same transport,
+    // same cadence, so there is ONE freshness story rather than two. The divergence rows are a
+    // comparison of two snapshots, so a second clock would manufacture phantom mismatches whenever
+    // the two timers landed either side of a change.
+    const sweepRegistry = onRegistry ? () => client.listGrants()
+      .then(grants => readRegistry({ client, grants, log }))
+      .then(r => onRegistry(r))
+      // A transport failure must report null-with-a-reason, never an empty roster: "I could not
+      // check" and "Nvoy does not know this key" are different answers.
+      .catch(e => onRegistry({ agents: null, why: `could not read the roster projection: ${e?.message || e}` }))
+      : () => {}
+    const bothSweeps = () => { sweep(); sweepRegistry() }
+    bothSweeps()                                   // boot read
+    const t = setInterval(bothSweeps, intervalMs)  // periodic re-read (durability + revocation pickup)
     if (t.unref) t.unref()
     return { stop() { clearInterval(t); client.close?.().catch?.(() => {}) } }
   }
   if (!nactorSk || !relayUrls?.length) {
     const env = envFallbackNames(creds || new Map())
     log(`  credential-grants: reader disabled (no nactor key / relays)${env.length ? ` — ENV FALLBACK in force for [${env.join(', ')}]` : ''}`)
+    onRegistry?.({ agents: null, why: 'the grant reader is disabled (no nactor key or relays), so this '
+      + 'runtime cannot read the roster projection' })
     return { stop() {} }
   }
+  // The direct-relay transport does not read the roster. Said out loud rather than left as an absence
+  // — which is the entire class of bug this projection exists to close. Reading it here would mean
+  // dereferencing a data:* scope on this path, and that is a deliberate scope cut, not an oversight.
+  onRegistry?.({ agents: null, why: 'the roster projection is read over the MCP transport only. This '
+    + 'runtime is on the direct-relay transport, so the roster was not read — set '
+    + 'NACT_GRANT_TRANSPORT=mcp to enable it.' })
   let lastFallback = null
   const sweep = () => syncCredentialGrants({ relayUrls, nactorSk, creds, allowedPublishers, log, onEvent })
     .then(s => {

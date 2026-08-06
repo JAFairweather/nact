@@ -196,5 +196,46 @@ t('the shared model is imported, not restated — one implementation, not two de
   assert.match(src, /window\.__nact\.actions = ACTIONS/)
 })
 
+// ── the divergence rows: the Director's complaint, made visible ─────────────
+t('the roster join has a section, and it renders rows rather than a count', () => {
+  assert.match(src, /Both rosters — the join/)
+  assert.match(src, /d\.onlyRegistry\.map\(p=>row\(p,'onlyRegistry'\)\)/)
+  assert.match(src, /d\.onlyBox\.map\(p=>row\(p,'onlyBox'\)\)/)
+  assert.match(src, /d\.unverified\.map\(p=>row\(p,'unverified'\)\)/)
+})
+t('a null roster is PRESERVED as null through mapState — not mapped to []', () => {
+  // The whole defect in one line: [] would claim Nvoy knows nobody.
+  assert.match(src, /Array\.isArray\(st\.registry\.agents\) \? st\.registry\.agents : null/)
+  // Whitespace-tolerant: the comment wraps in the source.
+  assert.match(src, /"could not read"[\s\S]{0,8}into "Nvoy knows nobody"/)
+})
+t('an unread projection claims no divergence, and says why it cannot', () => {
+  assert.match(src, /was <b>not read<\/b>, so no divergence can be claimed either way/)
+  assert.match(src, /reg\.why/, 'the reason from the runtime must reach the screen')
+})
+t('the projection is labelled a copy, with its age — never implied live', () => {
+  assert.match(src, /a <b>copy<\/b>, not a live view/)
+  assert.match(src, /generated \$\{esc\(age\)\}/)
+  assert.match(src, /reg\.stale\?' · <b>stale<\/b>'/)
+})
+t('agreement is stated affirmatively — the state the join is meant to produce', () => {
+  assert.match(src, /Both rosters agree/)
+  assert.match(src, /supposed to produce/, 'agreement must be named as the intended outcome')
+})
+t('unreadable projected rows are surfaced, not silently shortened', () => {
+  assert.match(src, /projected row\(s\) unreadable/)
+})
+t('the join is on the PUBKEY on both sides (ruling 1) — never the handle', () => {
+  assert.match(src, /box: S\.identities\.map\(i=>window\.__nact\.toHex\(i\.npub\)\)/)
+})
+t('the classifier is VENDORED from nvoy, not restated', () => {
+  assert.match(src, /"nact-registry": "\.\/lib\/registry\.mjs/)
+  assert.match(src, /import \* as REGISTRY_LIB from 'nact-registry'/)
+  assert.match(src, /two planes describing one join/)
+})
+t('the row copy comes from divergenceNote, so both planes read identically', () => {
+  assert.match(src, /D\.divergenceNote\(kind\)/)
+})
+
 console.log(`\n${pass}/${pass + fail} passed`)
 process.exit(fail ? 1 : 0)
