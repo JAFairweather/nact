@@ -107,5 +107,33 @@ t('the section header class it uses actually exists in the stylesheet', () => {
   assert.match(src, /^\.sect\{/m, 'app.html uses <h2 class="sect"> — the rule must be defined')
 })
 
+// ── 4. decisions before plumbing ─────────────────────────────────────────────
+t('tabs put decisions first and visually separate machine plumbing', () => {
+  assert.match(src, /\['queue','Queue'[^\n]+\['agents','Agents'\][^\n]+\['actions','Actions'\][^\n]+\['routing','Routing'\][^\n]+\['history','History'\][^\n]+\['\|'\][^\n]+\['channels','Channels'\][^\n]+\['policy','Policy'\][^\n]+\['deployment','Deployment'\]/)
+  assert.doesNotMatch(src.slice(src.indexOf('function renderTabs'), src.indexOf('function proposalCard')), /Agent Identities|\['directors'/)
+})
+t('every console tab is deep-linkable and back-button aware', () => {
+  assert.match(src, /const tabFromHash=/)
+  assert.match(src, /location\.hash='#\/'\+k/)
+  assert.match(src, /addEventListener\('hashchange'/)
+})
+t('Directors are approval authorities inside Agents, not a peer tab', () => {
+  assert.match(src, /function authorityPanel\(\)/)
+  assert.match(src, /Directors are human approval paths, not agents/)
+  assert.match(src, /\$\{authorityPanel\(\)\}/)
+})
+t('Actions lists read-back runtime grants before handing composition to Nvoy', () => {
+  const at=src.indexOf("if(tab==='actions')")
+  const body=src.slice(at,at+2400)
+  assert.ok(at>0,'Actions view must exist')
+  assert.match(body,/read back and verified/)
+  assert.ok(body.indexOf('Verified action grants') < body.indexOf('Grant another action'),'list must precede composer handoff')
+  assert.match(body,/nvoy\.nave\.pub\/console\/#ledger/)
+})
+t('an intent-only approval transport has the explicit ungoverned state', () => {
+  assert.match(src,/UNGOVERNED — configured intent only/)
+  assert.match(src,/<b>ungoverned<\/b>/)
+})
+
 console.log(`\n${pass}/${pass + fail} passed`)
 process.exit(fail ? 1 : 0)

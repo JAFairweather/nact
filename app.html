@@ -128,6 +128,7 @@ section{padding:8px 0 40px}
 .form label{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:-4px}
 .form .note{font-size:12px;color:var(--faint);margin-top:2px}
 .form button{align-self:flex-start;margin-top:4px}
+.tab-divider{width:1px;height:25px;background:var(--line2);margin:0 5px;align-self:center}
 
 /* policy table */
 table{width:100%;border-collapse:collapse;font-size:14px}
@@ -216,7 +217,9 @@ const S = {
   raised: [],
   history: [],
 };
-let tab = 'queue';
+const TAB_KEYS=new Set(['queue','agents','actions','routing','history','channels','policy','deployment']);
+const tabFromHash=()=>{const k=location.hash.replace(/^#\/?/,'').split('/')[0];return TAB_KEYS.has(k)?k:'queue'};
+let tab = tabFromHash();
 let LIVE = false;
 // The active Director signer: { signEvent(evt) } — either a NIP-07 browser
 // extension or a NIP-46 remote signer (bunker, e.g. nsec.app on iPhone). Both
@@ -461,10 +464,11 @@ function showLogin(){
 }
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  const defs=[['queue','Queue',S.queue.length],['identities','Agent Identities'],['channels','Channels'],['routing','Routing'],['directors','Directors'],['deployment','Deployment'],['policy','Policy'],['history','History']];
+  const defs=[['queue','Queue',S.queue.length],['agents','Agents'],['actions','Actions'],['routing','Routing'],['history','History'],['|'],['channels','Channels'],['policy','Policy'],['deployment','Deployment']];
   for(const [k,label,n] of defs){
+    if(k==='|'){t.appendChild($('<span class="tab-divider" aria-hidden="true"></span>'));continue;}
     const b=$(`<button class="tab ${k===tab?'on':''}">${label}${n?`<span class="n">${n}</span>`:''}</button>`);
-    b.onclick=()=>{tab=k;draw()}; t.appendChild(b);
+    b.onclick=()=>{location.hash='#/'+k}; t.appendChild(b);
   }
 }
 function proposalCard(p){
@@ -487,6 +491,12 @@ function proposalCard(p){
     ${crit?`<div class="hint">🔐 Critical action — no one-tap path. Approve on your bunker, which shows and signs the identical bytes.</div>`:''}
     <div class="acts">${acts}</div>
   </div>`;
+}
+function authorityPanel(){
+  return `<div class="sect2">Approval authorities</div>
+    <div class="muted" style="margin:0 0 12px">Directors are human approval paths, not agents. They live with the agents they authorize instead of pretending to be another peer resource.</div>
+    <div class="grid">${S.directors.map(d=>{const ver=d.bootstrap||d.verified,pr=profileOf(d.npub),nm=dispName(pr,d.label||'Director');return `<div class="card" style="padding:14px"><div class="row between"><div class="row">${avatarHTML(pr,nm)}<div><h3 style="font-size:15px">${esc(nm)}${d.bootstrap?' <span class="badge b-elev">anchor</span>':''}</h3>${pr&&pr.nip05?`<div class="muted" style="font-size:12px;color:var(--accent-bright)">${esc(pr.nip05)}</div>`:''}<div class="kv">${esc(d.npub)}</div></div></div><span class="badge ${ver?'b-ok':'b-elev'}">${ver?'verified':'pending'}</span></div><div class="hint" style="margin-top:8px">${ver?(d.bootstrap?'bootstrap approval anchor — cannot be removed':'self-verified by signature'):'invited — inert until this person signs the channel binding'}</div>${d.bootstrap?'':`<div class="acts"><button class="btn danger" data-rm-dir="${esc(d.npub)}">Remove invitation</button></div>`}</div>`}).join('')}</div>
+    <div class="card" style="margin-top:14px"><div class="form"><label>Invite an approval authority</label><input id="nd-label" placeholder="name or NIP-05 (label only)"><input id="nd-npub" placeholder="npub1… — their public key"><button class="btn primary" id="nd-add">Send invite</button><div class="note">An invitation grants nothing. Authority remains inert until that person signs with this key.</div></div></div>`;
 }
 function draw(){
   if(!LIVE){ showLogin(); return; }
@@ -523,7 +533,7 @@ function draw(){
       </div>`).join('')}</div>` : '';
     h = (S.raised.length ? `<h2 class="sect">Awaiting your key here</h2>` : '') + boxSection + deskSection;
   }
-  if(tab==='identities'){
+  if(tab==='agents'){
     h=`<div class="muted" style="margin:0 0 14px">The nostr identities your agent may <b>act as</b> — each signs the events it proposes. Custodial keys live on the box (SOPS-encrypted); NIP-46 identities keep their key on your device. Wire them to approval channels in <b>Routing</b>.</div><div class="grid">${S.identities.map(i=>{
       const chs=channelsFor(i.key);
       return `<div class="card"><div class="row between">
@@ -575,7 +585,14 @@ function draw(){
           <input id="ni-npub" placeholder="npub1… — this identity's public key (you hold its secret)" style="display:none">
           <button class="btn primary" id="ni-create">Create identity</button>
           <div class="note">Then wire it to a channel in <b>Routing</b>, and publish its profile.</div>
-        </div></div></div>`;
+        </div></div></div>${authorityPanel()}`;
+  }
+  if(tab==='actions'){
+    const entRows=Object.entries(S.entitlements||{}).filter(([,creds])=>creds&&creds.length);
+    h=`<div class="muted" style="margin:0 0 14px">Durable action grants this runtime has <b>read back and verified</b>. Nact shows names and holders, never credential values. The universal issuance and revocation ledger remains in Nvoy.</div>
+      <div class="sect2" style="margin-top:0">Verified action grants</div>
+      ${entRows.length?`<div class="grid">${entRows.map(([k,creds])=>`<div class="card"><div class="row">${avatarHTML(profileOf(idOf(k).npub),idOf(k).handle)}<div><h3>${esc(idOf(k).handle)}</h3><div class="kv">${esc(idOf(k).npub||k)}</div></div></div><div class="chips">${creds.map(c=>`<span class="chip on">🔑 ${esc(c)} · read back</span>`).join('')}</div></div>`).join('')}</div>`:`<div class="empty">${LIVE?'No action grants have been read back by this runtime.':'Not connected — connect as a Director to read verified action grants.'}</div>`}
+      <div class="sect2">Grant another action</div><div class="card"><div class="muted">Compose, sign, revoke, and verify grants in Nvoy, the superset grant plane. Nact shows a grant here only after this runtime reads it back.</div><div class="acts"><a class="btn primary" target="_blank" rel="noopener" href="https://nvoy.nave.pub/console/#ledger">Open Nvoy grant ledger ↗</a></div></div>`;
   }
   if(tab==='routing'){
     // AD-10: each identity binds to exactly ONE approval path, decided by who
@@ -608,12 +625,12 @@ function draw(){
         const honored=isDir(c)||chanShort(c)==='Web';
         const cls=wired?(honored?(live?'on':'stale'):'stale'):'off';
         const mark=wired?(honored?(live?'✓':'✕'):'◌'):'○';
-        const tip=wired?(honored?'click to unwire this transport':'CONFIGURED, NOT HONORED — Nactor delivers approvals to the Web queue only; this lane\'s taps are not consumed here (nact#46). Click to unwire.'):'click to wire this transport (transports within the gate are independent)';
+        const tip=wired?(honored?'click to unwire this transport':'UNGOVERNED — configured intent only; Nactor does not consume this transport. Click to unwire.'):'click to wire this transport (transports within the gate are independent)';
         return `<td${ci===boxCh.length&&dirCh.length?' style="border-left:2px solid var(--crit)"':''}><button class="cell ${cls}" data-wire="${i.key}|${c.id}" title="${tip}">${mark}</button></td>`;}).join('')}${cchans.map((c,ci)=>{
         const owns=commsOwns(c,i.key), live=owns&&c.status==='active'&&i.status==='active';
         const cls=owns?(live?'on':'stale'):'off', mark=owns?(live?'💬':'✕'):'·';
         return `<td${ci===0?' style="border-left:2px solid var(--low)"':''}><span class="cell ${cls}" style="cursor:default" title="${owns?"this agent's own comms line":"not this agent's line"}">${mark}</span></td>`;}).join('')}</tr>`;}).join('')}</tbody></table>
-      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ◌ <b>configured but not honored</b> (Nactor delivers to the Web queue only; nact#46) · ○ not wired (click to wire — <b>transports within a gate are independent</b>) · <span style="opacity:.5">·</span> wrong path (key custody decides; not clickable). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
+      <div class="muted" style="margin-top:10px;font-size:12.5px">Approval: ✓ wired &amp; live · ✕ severed · ◌ <b>ungoverned</b> — configured intent only, not consumed by this runtime · ○ not wired (click to wire — <b>transports within a gate are independent</b>) · <span style="opacity:.5">·</span> wrong path (key custody decides; not clickable). &nbsp; Communications: 💬 the agent's own line · ✕ its line is severed · · none yet.</div>
       ${boxCh.some(c=>chanShort(c)!=='Web')?`<div class="hint" style="margin-top:8px">◌ <b>The Telegram approval lane is not consumed by this runtime.</b> Nactor's only approval adapter is the Web queue; the Telegram approvals you actually receive ride luke-service's own propose lane, which predates this control plane and isn't governed here (nact#46). Wiring a ◌ cell records intent, but changes nothing at runtime until an approval multiplexer lands.</div>`:''}
       ${!dirCh.length?`<div class="hint" style="margin-top:8px">No <b>✋ Ngage</b> path yet — add an <b>Ngage draft-grant</b> channel in <b>Channels</b> (no secret; just the Director's npub) to route an identity's drafts to the Director's own hand.</div>`:''}
       ${cchans.length<S.identities.length?`<div class="hint" style="margin-top:8px">Agents with a <b>·</b> in every Communications column have <b>no comms channel yet</b> — raise a request for one in <b>Channels</b>, then paste the bot token when it surfaces in Nvoy.</div>`:''}</div>`;
@@ -710,16 +727,7 @@ function draw(){
       </table></div>`;
   }
   if(tab==='history'){
-    const ent=S.entitlements||{};
-    const entRows=Object.entries(ent).filter(([,creds])=>creds&&creds.length);
-    const standing = entRows.length ? `<div class="card" style="margin-bottom:14px">
-      <div class="label" style="margin-top:0">Standing credential grants</div>
-      <div class="muted" style="margin:2px 0 10px;font-size:12.5px">What each identity holds a live grant for right now (the credential-lifecycle log lives in Nvoy's Ledger). Names only — never values.</div>
-      ${entRows.map(([k,creds])=>`<div class="row" style="gap:8px;margin:6px 0">${avatarHTML(profileOf(idOf(k).npub), idOf(k).handle)}
-        <b style="min-width:120px">${esc(idOf(k).handle)}</b>
-        <div class="chips" style="margin:0">${creds.map(c=>`<span class="chip on">🔑 ${esc(c)}</span>`).join('')}</div></div>`).join('')}</div>` : '';
     h=`<div class="muted" style="margin:0 0 12px">The audit of everything that happened on <b>this runtime</b> — Director activations, event enactments, and what it loaded or dropped from Director-signed grants, newest first. (The issuance-side lifecycle — who granted what, rotations — is the Nvoy Ledger's job.)</div>
-      ${standing}
       ${S.history.length ? `<div class="grid">${S.history.map(e=>{
         if(e.t==='activated')return `<div class="card"><div class="row between">
         <div class="row">${avatarHTML(profileOf(idOf(e.identity).npub), idOf(e.identity).handle)}
@@ -788,7 +796,7 @@ function draw(){
       const npub=(document.getElementById('ni-npub').value||'').trim();
       if(!npub.startsWith('npub1')){alert('Enter this identity’s npub — you hold its secret; the box never does.');return;}
       if(!LIVE){alert('Connect as a Director to add a live identity.');return;}
-      try{ await api('POST','/api/identity',{name:key,npub,handle,director:true}); await refresh(); tab='identities'; draw(); }
+      try{ await api('POST','/api/identity',{name:key,npub,handle,director:true}); await refresh(); location.hash='#/agents'; }
       catch(e){ alert('Could not add identity: '+e.message); }
       return;
     }
@@ -865,6 +873,7 @@ async function decide(id,outcome,confirm){
 // fails to load, you still get a readable (signed-out) control plane with a
 // clear reason, rather than an empty document.
 draw();
+window.addEventListener('hashchange',()=>{tab=tabFromHash();draw()});
 function boot(){
   window.__nact.titlebar.render('#titlebar', {
     appName: 'Nact', tagline: 'control plane', sealSvg: window.__nact.titlebar.seal,
