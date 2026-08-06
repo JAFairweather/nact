@@ -107,5 +107,94 @@ t('the section header class it uses actually exists in the stylesheet', () => {
   assert.match(src, /^\.sect\{/m, 'app.html uses <h2 class="sect"> — the rule must be defined')
 })
 
+// ── the Actions screen, and the tab order that frames it (#56 part 3) ────────
+t('Actions is a tab, and Directors is not', () => {
+  assert.match(src, /\['actions', 'Actions'\]/)
+  assert.doesNotMatch(src, /\['directors',/, 'a Director is an approval path, not a peer of an agent')
+})
+t('the tab order puts decisions before plumbing, with a divider between', () => {
+  const order = [...src.matchAll(/\['(queue|identities|actions|routing|history|--|channels|policy|deployment)'/g)].map(m => m[1])
+  assert.deepEqual(order.slice(0, 9),
+    ['queue', 'identities', 'actions', 'routing', 'history', '--', 'channels', 'policy', 'deployment'])
+})
+t('the divider is a real element, not a comment about one', () => {
+  assert.match(src, /^\.tab-div\{/m, 'the class must exist in the stylesheet')
+  assert.match(src, /class="tab-div"/)
+})
+t('the badge law holds: the Queue counts BOTH what it can sign and what it cannot', () => {
+  // A badge means a human decision is waiting. A director-path draft is waiting on a human just as
+  // much as a box-path proposal, so counting only the box path would under-report the ask.
+  assert.match(src, /S\.queue\.length \+ S\.raised\.length/)
+})
+t('hash routing exists, so a cross-plane deep link can land', () => {
+  assert.match(src, /function tabFromHash/)
+  assert.match(src, /addEventListener\('hashchange'/)
+  assert.match(src, /\{ const k=tabFromHash\(\); if\(k\) tab=k; \}/, 'the boot must honour the hash BEFORE the first draw')
+})
+t('an unknown tab falls back rather than rendering a blank plane', () => {
+  assert.match(src, /if\(!TAB_KEYS\.includes\(k\)\) k = 'queue'/)
+})
+
+t('Actions reads PUBLIC 440s and needs no key, per AD-12 ruling 4', () => {
+  assert.match(src, /kinds:\[440\]/)
+  assert.match(src, /NO KEY IS USED/)
+})
+t('…and collects 441 revocations by their e-tag, so a revoked grant cannot read as active', () => {
+  assert.match(src, /kinds:\[441\]/)
+  assert.match(src, /t\[0\]==='e'&&t\[1\]/)
+})
+t('a silent relay renders "no relay answered", NEVER an empty list', () => {
+  // The load-bearing assertion of the whole screen. An empty list claims nothing is granted; silence
+  // is a claim about the relays only, and conflating them is how unobservable authority happens.
+  assert.match(src, /state:'silent'/)
+  assert.match(src, /No relay answered\. Nothing is shown because nothing could be verified/)
+  // Whitespace- and markup-tolerant: the sentence wraps in the template and carries a <b> in the
+  // middle. Pinning the exact spacing would make this a formatting test.
+  assert.match(src, /this is[\s\S]{0,40}the same as “nothing granted\.”/)
+})
+t('an empty ANSWERED result is affirmative — an answer, not a gap', () => {
+  assert.match(src, /this is an answer, not a gap/)
+})
+t('unreadable events are counted in the stamp, not dropped in silence', () => {
+  assert.match(src, /unreadable and not shown/)
+})
+t('the relay answer count is reported, so partial coverage is visible', () => {
+  assert.match(src, /relays answered/)
+})
+t('every row states WHO ENFORCES it — a console enforces nothing', () => {
+  assert.match(src, /Enforced by: /)
+})
+t('the tier is shown as fixed, and carries the reason it cannot be raised (3b)', () => {
+  assert.match(src, /tier <b>\$\{esc\(r\.tier\)\}<\/b> · fixed/)
+  assert.match(src, /A\?\.tierCap\?\.\(\)\.why/, 'the reason must ride with the number')
+})
+t('the composer refuses instead of pretending, and says what the envelope requires', () => {
+  assert.match(src, /will not pretend/)
+  assert.match(src, /<button class="btn" disabled title="No runtime endpoint issues a capability grant yet/)
+  assert.match(src, /may only be <b>tightened<\/b>/)
+})
+t('admissions are not issuable here, and the refusal says why', () => {
+  assert.match(src, /claim authority this runtime does not have/)
+})
+t('revoke enumerates the queued proposals first (3c), and signs nothing it cannot', () => {
+  assert.match(src, /revokeImpact/)
+  assert.match(src, /queued proposal/)
+  assert.match(src, /NOTHING WAS SIGNED/, 'an unwired action must say so rather than appear to work')
+})
+t('the queue↔grant join is on the PUBKEY, never the display name (ruling 1)', () => {
+  assert.match(src, /window\.__nact\?\.toHex/)
+  assert.match(src, /window\.__nact\.toHex = function/)
+})
+t('"Forget on this device" no longer marks the row revoked', () => {
+  // It had set status='revoked' locally — claiming an authority change that never happened.
+  assert.doesNotMatch(src, /i\.status='revoked';draw\(\)/)
+  assert.match(src, /No grant is revoked, no key is touched/)
+})
+t('the shared model is imported, not restated — one implementation, not two descriptions', () => {
+  assert.match(src, /import \* as ACTIONS from 'nact-actions'/)
+  assert.match(src, /"nact-actions": "\.\/lib\/actions\.mjs/)
+  assert.match(src, /window\.__nact\.actions = ACTIONS/)
+})
+
 console.log(`\n${pass}/${pass + fail} passed`)
 process.exit(fail ? 1 : 0)
