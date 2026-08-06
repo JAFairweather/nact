@@ -128,5 +128,135 @@ t('the exact decision event authenticates its own endpoint without a second gene
   assert.doesNotMatch(body, /api\('POST','\/api\/decide-external'/)
 })
 
+// ── the Actions screen, and the tab order that frames it (#56 part 3) ────────
+t('Actions is a tab, and Directors is not', () => {
+  assert.match(src, /\['actions', 'Actions'\]/)
+  assert.doesNotMatch(src, /\['directors',/, 'a Director is an approval path, not a peer of an agent')
+})
+t('the tab order puts decisions before plumbing, with a divider between', () => {
+  const order = [...src.matchAll(/\['(queue|identities|actions|routing|history|--|channels|policy|deployment)'/g)].map(m => m[1])
+  assert.deepEqual(order.slice(0, 9),
+    ['queue', 'identities', 'actions', 'routing', 'history', '--', 'channels', 'policy', 'deployment'])
+})
+t('the divider is a real element, not a comment about one', () => {
+  assert.match(src, /^\.tab-div\{/m, 'the class must exist in the stylesheet')
+  assert.match(src, /class="tab-div"/)
+})
+t('the badge law holds: the Queue counts BOTH what it can sign and what it cannot', () => {
+  // A badge means a human decision is waiting. A director-path draft is waiting on a human just as
+  // much as a box-path proposal, so counting only the box path would under-report the ask.
+  assert.match(src, /S\.queue\.length \+ S\.raised\.length/)
+})
+t('hash routing exists, so a cross-plane deep link can land', () => {
+  assert.match(src, /function tabFromHash/)
+  assert.match(src, /addEventListener\('hashchange'/)
+  assert.match(src, /\{ const k=tabFromHash\(\); if\(k\) tab=k; \}/, 'the boot must honour the hash BEFORE the first draw')
+})
+t('an unknown tab falls back rather than rendering a blank plane', () => {
+  assert.match(src, /if\(!TAB_KEYS\.includes\(k\)\) k = 'queue'/)
+})
+
+t('Actions reads PUBLIC 440s and needs no key, per AD-12 ruling 4', () => {
+  assert.match(src, /kinds:\[440\]/)
+  assert.match(src, /NO KEY IS USED/)
+})
+t('…and collects 441 revocations by their e-tag, so a revoked grant cannot read as active', () => {
+  assert.match(src, /kinds:\[441\]/)
+  assert.match(src, /t\[0\]==='e'&&t\[1\]/)
+})
+t('a silent relay renders "no relay answered", NEVER an empty list', () => {
+  // The load-bearing assertion of the whole screen. An empty list claims nothing is granted; silence
+  // is a claim about the relays only, and conflating them is how unobservable authority happens.
+  assert.match(src, /state:'silent'/)
+  assert.match(src, /No relay answered\. Nothing is shown because nothing could be verified/)
+  // Whitespace- and markup-tolerant: the sentence wraps in the template and carries a <b> in the
+  // middle. Pinning the exact spacing would make this a formatting test.
+  assert.match(src, /this is[\s\S]{0,40}the same as “nothing granted\.”/)
+})
+t('an empty ANSWERED result is affirmative — an answer, not a gap', () => {
+  assert.match(src, /this is an answer, not a gap/)
+})
+t('unreadable events are counted in the stamp, not dropped in silence', () => {
+  assert.match(src, /unreadable and not shown/)
+})
+t('the relay answer count is reported, so partial coverage is visible', () => {
+  assert.match(src, /relays answered/)
+})
+t('every row states WHO ENFORCES it — a console enforces nothing', () => {
+  assert.match(src, /Enforced by: /)
+})
+t('the tier is shown as fixed, and carries the reason it cannot be raised (3b)', () => {
+  assert.match(src, /tier <b>\$\{esc\(r\.tier\)\}<\/b> · fixed/)
+  assert.match(src, /A\?\.tierCap\?\.\(\)\.why/, 'the reason must ride with the number')
+})
+t('the composer refuses instead of pretending, and says what the envelope requires', () => {
+  assert.match(src, /will not pretend/)
+  assert.match(src, /<button class="btn" disabled title="No runtime endpoint issues a capability grant yet/)
+  assert.match(src, /may only be <b>tightened<\/b>/)
+})
+t('admissions are not issuable here, and the refusal says why', () => {
+  assert.match(src, /claim authority this runtime does not have/)
+})
+t('revoke enumerates the queued proposals first (3c), and signs nothing it cannot', () => {
+  assert.match(src, /revokeImpact/)
+  assert.match(src, /queued proposal/)
+  assert.match(src, /NOTHING WAS SIGNED/, 'an unwired action must say so rather than appear to work')
+})
+t('the queue↔grant join is on the PUBKEY, never the display name (ruling 1)', () => {
+  assert.match(src, /window\.__nact\?\.toHex/)
+  assert.match(src, /window\.__nact\.toHex = function/)
+})
+t('"Forget on this device" no longer marks the row revoked', () => {
+  // It had set status='revoked' locally — claiming an authority change that never happened.
+  assert.doesNotMatch(src, /i\.status='revoked';draw\(\)/)
+  assert.match(src, /No grant is revoked, no key is touched/)
+})
+t('the shared model is imported, not restated — one implementation, not two descriptions', () => {
+  assert.match(src, /import \* as ACTIONS from 'nact-actions'/)
+  assert.match(src, /"nact-actions": "\.\/lib\/actions\.mjs/)
+  assert.match(src, /window\.__nact\.actions = ACTIONS/)
+})
+
+// ── the divergence rows: the Director's complaint, made visible ─────────────
+t('the roster join has a section, and it renders rows rather than a count', () => {
+  assert.match(src, /Both rosters — the join/)
+  assert.match(src, /d\.onlyRegistry\.map\(p=>row\(p,'onlyRegistry'\)\)/)
+  assert.match(src, /d\.onlyBox\.map\(p=>row\(p,'onlyBox'\)\)/)
+  assert.match(src, /d\.unverified\.map\(p=>row\(p,'unverified'\)\)/)
+})
+t('a null roster is PRESERVED as null through mapState — not mapped to []', () => {
+  // The whole defect in one line: [] would claim Nvoy knows nobody.
+  assert.match(src, /Array\.isArray\(st\.registry\.agents\) \? st\.registry\.agents : null/)
+  // Whitespace-tolerant: the comment wraps in the source.
+  assert.match(src, /"could not read"[\s\S]{0,8}into "Nvoy knows nobody"/)
+})
+t('an unread projection claims no divergence, and says why it cannot', () => {
+  assert.match(src, /was <b>not read<\/b>, so no divergence can be claimed either way/)
+  assert.match(src, /reg\.why/, 'the reason from the runtime must reach the screen')
+})
+t('the projection is labelled a copy, with its age — never implied live', () => {
+  assert.match(src, /a <b>copy<\/b>, not a live view/)
+  assert.match(src, /generated \$\{esc\(age\)\}/)
+  assert.match(src, /reg\.stale\?' · <b>stale<\/b>'/)
+})
+t('agreement is stated affirmatively — the state the join is meant to produce', () => {
+  assert.match(src, /Both rosters agree/)
+  assert.match(src, /supposed to produce/, 'agreement must be named as the intended outcome')
+})
+t('unreadable projected rows are surfaced, not silently shortened', () => {
+  assert.match(src, /projected row\(s\) unreadable/)
+})
+t('the join is on the PUBKEY on both sides (ruling 1) — never the handle', () => {
+  assert.match(src, /box: S\.identities\.map\(i=>window\.__nact\.toHex\(i\.npub\)\)/)
+})
+t('the classifier is VENDORED from nvoy, not restated', () => {
+  assert.match(src, /"nact-registry": "\.\/lib\/registry\.mjs/)
+  assert.match(src, /import \* as REGISTRY_LIB from 'nact-registry'/)
+  assert.match(src, /two planes describing one join/)
+})
+t('the row copy comes from divergenceNote, so both planes read identically', () => {
+  assert.match(src, /D\.divergenceNote\(kind\)/)
+})
+
 console.log(`\n${pass}/${pass + fail} passed`)
 process.exit(fail ? 1 : 0)

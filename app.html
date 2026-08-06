@@ -85,6 +85,16 @@ section{padding:8px 0 40px}
    signable on this box. */
 .sect{font-size:14px;letter-spacing:.01em;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
 .sect:first-child{margin-top:0}
+/* The nav divider: agent questions to its left, machine questions to its right. */
+.tab-div{align-self:stretch;width:1px;background:var(--line);margin:2px 8px}
+/* Actions: a durable action grant, list-first. */
+.act-row{display:grid;grid-template-columns:1fr auto;gap:8px 14px;align-items:start;padding:12px 0;border-top:1px solid var(--line)}
+.act-row:first-of-type{border-top:0}
+.act-facts{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.act-fact{font-family:var(--mono);font-size:11.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
+.act-fact b{color:var(--text);font-weight:600}
+.act-enforcer{font-size:12px;color:var(--dim);margin-top:5px}
+.act-dead{opacity:.55}
 
 /* buttons */
 .acts{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
@@ -157,7 +167,9 @@ footer{color:var(--faint);font-size:12.5px;text-align:center;padding:26px 0 44px
     "nostr-tools/nip46": "./assets/vendor/nostr-tools-bunker.mjs?v=2",
     "nave-connect": "./lib/nave-connect.mjs?v=2",
     "nave-titlebar": "./lib/nave-titlebar.mjs?v=2",
-    "nact-routing": "./lib/routing.mjs?v=3"
+    "nact-routing": "./lib/routing.mjs?v=3",
+    "nact-actions": "./lib/actions.mjs?v=1",
+    "nact-registry": "./lib/registry.mjs?v=1"
   }
 }
 </script>
@@ -215,6 +227,10 @@ const S = {
   // the key is not on this box — but it never forbade showing them. A queue may show what it
   // cannot sign, as long as it says so and hands you the door.
   raised: [],
+  // Durable action grants, read from public 440s. Four states, and the fourth is why this field is
+  // an object rather than an array: `silent` must render "no relay answered", never an empty list.
+  // An empty list is a claim that nothing is granted; silence is a claim about the relays only.
+  actions: { state: 'unread', rows: [], dropped: 0, relays: '' },
   history: [],
 };
 let tab = 'queue';
@@ -241,6 +257,15 @@ function mapState(st){
   S.externalActions=(st.externalActions||[]).map(p=>({proposalId:p.proposal_id,instance:p.instance,participant:p.participant,
     fingerprint:p.fingerprint,action:p.action,content:p.content,recipient:p.recipient,ctx:p.context||'',approvalUrl:p.approval_url,
     expiresAt:p.expires_at_ms}));
+  // The delegator's projected roster. `agents: null` is PRESERVED as null: mapping it to [] would turn
+  // "could not read" into "Nvoy knows nobody", which is the exact conflation the divergence rows exist
+  // to prevent.
+  S.registry = (st.registry && typeof st.registry==='object')
+    ? { agents: Array.isArray(st.registry.agents) ? st.registry.agents : null,
+        generatedAt: st.registry.generatedAt ?? null, generation: st.registry.generation ?? null,
+        stale: st.registry.stale ?? null, dropped: st.registry.dropped ?? 0, why: st.registry.why ?? null }
+    : { agents:null, generatedAt:null, generation:null, stale:null, dropped:0,
+        why:'this runtime reported no roster field at all — it predates the projection' };
   // `raised` was fetched and discarded here. Mapped defensively: an entry with no scopeId is not
   // addressable and is dropped rather than rendered as an unopenable card.
   S.raised=(st.raised||[]).filter(r=>r&&r.scopeId).map(r=>({scopeId:r.scopeId,identity:r.identity||'—',
@@ -253,7 +278,27 @@ function mapState(st){
     return {t:'enact',id:h.id,identity:h.identity,klabel:h.kindLabel||'—',outcome:h.outcome,fp:(h.fingerprint||'').slice(0,4)+'…',when,relays:h.detail?(parseInt(h.detail)||0):0}});
   S.entitlements=st.entitlements||{};
 }
-async function refresh(){ mapState(await api('GET','/api/state')); await loadProfiles(); draw(); }
+async function refresh(){ mapState(await api('GET','/api/state')); await loadProfiles(); draw(); loadActions(); }
+
+// Read the durable action grants for this box's identities off the relays. NO KEY IS USED and none
+// is needed: a `da-cap` on a public 440 is checkable by anyone, which AD-12 ruling 4 makes a
+// requirement rather than a convenience. Best-effort and non-blocking — but a failure sets `silent`,
+// never an empty list, because "no relay answered" and "nothing granted" are different facts and
+// only one of them is knowable here.
+async function loadActions(){
+  const A = window.__nact?.actions;
+  if(!A || !window.__nact?.queryGrants){ S.actions={state:'silent',rows:[],dropped:0,relays:'lib/actions.mjs did not load'}; return; }
+  const pubs = S.identities.map(i=>i.npub).filter(Boolean);
+  if(!pubs.length){ S.actions={state:'answered',rows:[],dropped:0,relays:''}; if(tab==='actions')draw(); return; }
+  S.actions={...S.actions,state:'reading'}; if(tab==='actions')draw();
+  try{
+    const { events, revoked, answered, total } = await window.__nact.queryGrants(pubs);
+    if(!answered){ S.actions={state:'silent',rows:[],dropped:0,relays:`0/${total} relays answered`}; if(tab==='actions')draw(); return; }
+    const { rows, dropped } = A.actionRows(events, { revoked, now: Math.floor(Date.now()/1000) });
+    S.actions={ state:'answered', rows, dropped, relays:`${answered}/${total} relays answered` };
+  }catch(e){ S.actions={state:'silent',rows:[],dropped:0,relays:String(e.message||e)}; }
+  if(tab==='actions')draw();
+}
 // Resolve kind-0 profiles for every Director + agent identity so the plane
 // renders avatars/names instead of bare pubkeys. Best-effort — never blocks.
 async function loadProfiles(){
@@ -392,6 +437,12 @@ async function signOut(){
   // Drop everything the runtime gave us — signed out must look exactly like
   // never-connected, not like a stale snapshot of someone's real queue.
   S.director=null; S.directors=[]; S.identities=[]; S.channels=[]; S.queue=[]; S.externalActions=[]; S.history=[]; S.profiles={};
+  // Everything this wave added resets too. `raised` and `actions` clear to their empty/unread shapes,
+  // and `registry` clears to null-with-a-reason rather than [] — signed out must not read as "Nvoy
+  // knows nobody", which is the same conflation the divergence rows exist to prevent.
+  S.raised=[]; S.actions={ state:'unread', rows:[], dropped:0, relays:'' };
+  S.registry={ agents:null, generatedAt:null, generation:null, stale:null, dropped:0,
+    why:'not connected — nothing was read, so the roster is unknown rather than empty' };
   const b=document.getElementById('banner');
   b.innerHTML='Not connected — nothing is loaded. <b>Connect</b> as a Director to reach Nactor (the live Nact runtime) behind the NIP-98 gate: a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone). Your key never enters this page.';
   b.style.borderColor=''; b.style.color='';
@@ -463,14 +514,52 @@ function showLogin(){
   document.getElementById('lg-bunker-go').onclick=bgo;
   document.getElementById('lg-bunker').onkeydown=(e)=>{ if(e.key==='Enter')bgo(); };
 }
+// The tab order encodes a claim: FIVE of these answer questions about agents, three answer questions
+// about a machine — and the machine questions get asked about once a month. The divider is therefore
+// load-bearing, not decoration. Before this, three of the first six were plumbing and the queue (the
+// point of the product) sat beside Deployment as though they were peers.
+//
+// `Directors` is gone. A Director is not a peer of an agent, it is an approval path — it lives in the
+// Agents roster's "Signs with" column and in Channels as a channel TYPE (AD-10).
+//
+// BADGE LAW: a count badge means a human decision is waiting. Nothing else may carry one.
+const TAB_DEFS = [
+  ['queue', 'Queue', () => S.queue.length + S.raised.length + S.externalActions.length],
+  ['identities', 'Agents'],
+  ['actions', 'Actions'],
+  ['routing', 'Routing'],
+  ['history', 'History'],
+  ['--', ''],                       // the divider: agent questions above, machine questions below
+  ['channels', 'Channels'],
+  ['policy', 'Policy'],
+  ['deployment', 'Deployment'],
+]
+const TAB_KEYS = TAB_DEFS.filter(([k]) => k !== '--').map(([k]) => k)
+
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  const defs=[['queue','Queue',S.queue.length+S.externalActions.length],['identities','Agent Identities'],['channels','Channels'],['routing','Routing'],['directors','Directors'],['deployment','Deployment'],['policy','Policy'],['history','History']];
-  for(const [k,label,n] of defs){
+  for(const [k,label,count] of TAB_DEFS){
+    if(k==='--'){ t.appendChild($('<span class="tab-div" aria-hidden="true"></span>')); continue; }
+    const n = typeof count==='function' ? count() : count;
     const b=$(`<button class="tab ${k===tab?'on':''}">${label}${n?`<span class="n">${n}</span>`:''}</button>`);
-    b.onclick=()=>{tab=k;draw()}; t.appendChild(b);
+    b.onclick=()=>{ setTab(k) }; t.appendChild(b);
   }
 }
+
+// HASH ROUTING. app.html discarded tab state entirely, so nothing here was deep-linkable and a
+// cross-plane link could not land — which is the whole point of `#agent/<npub>` being the join key
+// (AD-12 ruling 1). An unknown hash falls back to the default rather than rendering a blank plane.
+function setTab(k, { push = true } = {}){
+  if(!TAB_KEYS.includes(k)) k = 'queue';
+  tab = k;
+  if(push){ try{ location.hash = k }catch{} }
+  draw();
+}
+function tabFromHash(){
+  const h=(location.hash||'').replace(/^#/,'').split('/')[0];
+  return TAB_KEYS.includes(h) ? h : null;
+}
+window.addEventListener('hashchange', ()=>{ const k=tabFromHash(); if(k && k!==tab) setTab(k,{push:false}); });
 function proposalCard(p){
   const idn=idOf(p.identity);
   const crit=p.tier==='critical';
@@ -596,6 +685,73 @@ function draw(){
           <div class="note">Then wire it to a channel in <b>Routing</b>, and publish its profile.</div>
         </div></div></div>`;
   }
+  // ── Actions: the durable action grants, LIST FIRST ─────────────────────────
+  //
+  // This object did not exist on the act side. Nvoy could issue a `da-cap` and nothing here could
+  // list one, say what it permitted, or revoke one — so durable authority was real and unobservable.
+  //
+  // It is read from PUBLIC 440s with no key at all, because AD-12 ruling 4 requires that enforcement
+  // never need one ("being unable to check is not permission"). A console that could only show the
+  // grants it happened to hold a key for would under-report authority, which is the exact failure
+  // this plane exists to end.
+  if(tab==='actions'){
+    const A = window.__nact?.actions;      // lib/actions.mjs, loaded as a module below
+    const st = S.actions;                  // { state:'unread'|'reading'|'answered'|'silent', rows, dropped, relays }
+    const rowHtml = (r)=>{
+      const dead = r.status!=='active';
+      const ttl = r.expiresAt ? `expires ${new Date(r.expiresAt*1000).toLocaleString()}` : 'no expiry recorded';
+      return `<div class="act-row${dead?' act-dead':''}">
+        <div>
+          <h3 style="font-size:15px">${esc(r.label)}</h3>
+          <div class="kv">${esc(r.grantee.slice(0,16))}… · grant ${esc(r.id.slice(0,12))}…</div>
+          <div class="act-facts">
+            <span class="act-fact" title="${esc(A?.tierCap?.().why||'')}">tier <b>${esc(r.tier)}</b> · fixed</span>
+            <span class="act-fact">${esc(ttl)}</span>
+            <span class="act-fact">${r.ratePerHour!==null?`<b>${r.ratePerHour}</b>/hour`:'no rate recorded'}</span>
+            ${r.scopeHash?`<span class="act-fact" title="what this grant is OVER is a salted hash chosen by the issuing app — private by construction, resolvable only by someone who already knows the subject">🔒 ${esc(String(r.scopeHash).slice(0,10))}…</span>`:''}
+            <span class="badge ${dead?'b-off':'b-ok'}">${esc(r.status)}</span>
+          </div>
+          <div class="act-enforcer">Enforced by: ${esc(r.enforcer)}</div>
+        </div>
+        <div class="acts">${dead?'':`<button class="btn danger" data-revoke-cap="${esc(r.id)}">Revoke…</button>`}</div>
+      </div>`;
+    };
+    // Three-state source stamp. `silent` must never render as an empty list: "no relay answered" is
+    // not "nothing granted", and a zero here would be a claim about authority nobody verified.
+    const body = st.state==='answered'
+      ? (st.rows.length
+          ? `<div class="card">${st.rows.map(rowHtml).join('')}</div>`
+          : `<div class="empty">No durable action grants. Nothing standing has been granted to any agent — this is an answer, not a gap.</div>`)
+      : st.state==='reading'
+        ? `<div class="empty">Reading public grants from the relays…</div>`
+        : `<div class="empty">No relay answered. Nothing is shown because nothing could be verified — this is
+             <b>not</b> the same as “nothing granted.”${st.relays?`<div class="hint" style="margin-top:8px">${esc(st.relays)}</div>`:''}</div>`;
+    h = `<div class="muted" style="margin:0 0 6px">What your agents may <b>keep doing</b> — the durable half of
+      authority. A standing grant confers <b>queue entry, never a signature</b>: every instantiation still
+      passes your tap (AD-12 3a).</div>
+      <div class="hint" style="margin:0 0 14px">${st.state==='answered'
+        ? `from public 440s read off the relays · ${st.rows.length} grant${st.rows.length===1?'':'s'}${st.dropped?` · ${st.dropped} unreadable and not shown`:''}`
+        : 'source: public 440s on the relays — no key required, by design (AD-12 ruling 4)'}</div>
+      ${body}
+      <h2 class="sect">Grant task authority</h2>
+      <div class="card" style="border-style:dashed">
+        <div class="muted">Issuing is not wired to a runtime endpoint yet, so this console will not pretend to
+          do it — the same rule that stopped <b>＋ Add agent</b> inventing identities. What the envelope
+          <i>must</i> carry is fixed and shown here, so the shape is reviewable before it is buildable.</div>
+        <div class="act-facts" style="margin-top:10px">
+          <span class="act-fact">cap <b>task</b> · <b>task+act</b> · <b>task-relay</b></span>
+          <span class="act-fact">tier <b>low</b> · fixed at issuance</span>
+          <span class="act-fact">TTL ≤ <b>${A?Math.round(A.ESTATE_DEFAULTS.ttlSeconds/3600):'—'}h</b></span>
+          <span class="act-fact">rate ≤ <b>${A?A.ESTATE_DEFAULTS.ratePerHour:'—'}</b>/hour</span>
+          <span class="act-fact">exactly one bound approval path</span>
+        </div>
+        <div class="hint" style="margin-top:8px">TTL and rate may only be <b>tightened</b> from the estate
+          default, never widened (AD-12 3d), so a forgotten field fails safe. Admissions
+          (<b>admit</b>, <b>mirror</b>) are <b>not</b> issuable here — a slice enforces those, and issuing one
+          from this plane would claim authority this runtime does not have.</div>
+        <button class="btn" disabled title="No runtime endpoint issues a capability grant yet. Nothing is created here until the box can confirm it.">Grant task authority…</button>
+      </div>`;
+  }
   if(tab==='routing'){
     // AD-10: each identity binds to exactly ONE approval path, decided by who
     // signs. Split the approval columns into the box gate (Nactor signs) and
@@ -637,8 +793,59 @@ function draw(){
       ${!dirCh.length?`<div class="hint" style="margin-top:8px">No <b>✋ Ngage</b> path yet — add an <b>Ngage draft-grant</b> channel in <b>Channels</b> (no secret; just the Director's npub) to route an identity's drafts to the Director's own hand.</div>`:''}
       ${cchans.length<S.identities.length?`<div class="hint" style="margin-top:8px">Agents with a <b>·</b> in every Communications column have <b>no comms channel yet</b> — raise a request for one in <b>Channels</b>, then paste the bot token when it surfaces in Nvoy.</div>`:''}</div>`;
   }
-  if(tab==='directors'){
-    h=`<div class="card">
+  // `Directors` was a tab of its own, which framed a Director as a PEER of an agent. It is not:
+  // it is an approval path (AD-10). So the roster moves under Agents, where the question it
+  // answers — "who can approve for this identity" — is actually being asked. Ngage as a channel
+  // TYPE lives in Channels. Appended to the Agents view rather than replacing it.
+  // ── THE DIVERGENCE ROWS ────────────────────────────────────────────────────
+  //
+  // The Director's original report was that some agents show in Nvoy and not here. The mechanism was
+  // fixed in #57 (both sides key on the hex pubkey) but the SYMPTOM was an absence, and an absence is
+  // the one defect nobody can see. This turns it into a row.
+  //
+  // The third state is the load-bearing one and it is why `registry.agents === null` is not treated as
+  // an empty set: when the projection was not read, every on-box key is `not verified`, never "known
+  // only to Nact". Claiming the latter would assert a fact about a store nobody queried.
+  if(tab==='identities'){
+    const D = window.__nact?.registry;
+    if(D){
+      const reg = S.registry || {};
+      const d = D.diffRosters({ registry: reg.agents, box: S.identities.map(i=>window.__nact.toHex(i.npub)).filter(Boolean) });
+      const nameOf = (pub)=>{ const i=S.identities.find(x=>window.__nact.toHex(x.npub)===pub); return i?i.handle:null; };
+      const row = (pub, kind)=>`<div class="act-row">
+        <div>
+          <h3 style="font-size:14px">${esc(nameOf(pub) || (pub.slice(0,16)+'…'))}</h3>
+          <div class="kv">${esc(pub.slice(0,32))}…</div>
+          <div class="act-enforcer">${esc(D.divergenceNote(kind))}</div>
+        </div>
+        <div class="acts">${kind==='onlyRegistry'
+          ? '<span class="badge b-off" title="no key slot for this agent exists on this box">no key here</span>'
+          : kind==='onlyBox'
+            ? '<span class="badge b-off" title="a key exists here with no row in the Director\'s registry">unregistered</span>'
+            : '<span class="badge b-off" title="the roster projection was not read">not verified</span>'}</div>
+      </div>`;
+      const rows = [
+        ...d.onlyRegistry.map(p=>row(p,'onlyRegistry')),
+        ...d.onlyBox.map(p=>row(p,'onlyBox')),
+        ...d.unverified.map(p=>row(p,'unverified')),
+      ];
+      const age = reg.generatedAt ? new Date(reg.generatedAt*1000).toLocaleString() : null;
+      h += `<h2 class="sect">Both rosters — the join</h2>
+        <div class="hint" style="margin:0 0 10px">${d.registryKnown
+          ? `from the Director's roster projection${age?` · generated ${esc(age)}`:''}${reg.stale?' · <b>stale</b>':''}${reg.generation!==null?` · v${esc(String(reg.generation))}`:''}${reg.dropped?` · ${reg.dropped} projected row(s) unreadable`:''}
+             — a <b>copy</b>, not a live view.`
+          : `The roster projection was <b>not read</b>, so no divergence can be claimed either way.
+             ${reg.why?`<br>${esc(reg.why)}`:''}`}</div>
+        ${rows.length
+          ? `<div class="card">${rows.join('')}</div>`
+          : d.registryKnown
+            ? `<div class="empty">Both rosters agree: ${d.both.length} agent${d.both.length===1?'':'s'} in
+                 the Director's registry and on this box, and nothing on either side alone. This is the
+                 state the join is supposed to produce.</div>`
+            : `<div class="empty">No keys on this box to compare.</div>`}`;
+    }
+    h += `<h2 class="sect">Directors — who approves</h2>`;
+    h += `<div class="card">
       <h3>Directors</h3>
       <div class="muted" style="margin:2px 0 12px">The human decision-maker(s) who approve or reject a proposal before it's signed — <b>not</b> Noir's AI "Director". Adding an npub is an <b>invitation</b>, not authorization: a Director's authority is inert until they approve by <b>signing with their own key</b>, so you can't implicate anyone. A nostr-DM/NIP-46 Director self-verifies; an out-of-band channel stays <b>pending</b> until they sign a challenge naming that channel. See <a href="/docs/threat-model.md" target="_blank">the threat model</a>.</div>
       <div class="grid">${S.directors.map(d=>{
@@ -773,7 +980,34 @@ function draw(){
   v.querySelectorAll('[data-no]').forEach(b=>b.onclick=()=>decide(b.dataset.no,'rejected'));
   v.querySelectorAll('[data-ext-ok]').forEach(b=>b.onclick=()=>decideExternal(b.dataset.extOk,'approve'));
   v.querySelectorAll('[data-ext-no]').forEach(b=>b.onclick=()=>decideExternal(b.dataset.extNo,'reject'));
-  v.querySelectorAll('[data-revoke-id]').forEach(b=>b.onclick=()=>{const i=S.identities.find(x=>x.key===b.dataset.revokeId);i.status='revoked';draw()});
+  // "Forget on this device" is local-only, so it must not render as a revocation — marking the row
+  // `revoked` claimed an authority change that never happened. It drops the row from this view and
+  // says so; the next refresh brings it back, because the box is the authority, not this page.
+  v.querySelectorAll('[data-revoke-id]').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.revokeId;
+    if(!confirm('Forget this identity on this device?\n\nIt disappears from this console until the next '
+      +'refresh. No grant is revoked, no key is touched, and the box is unchanged.')) return;
+    S.identities=S.identities.filter(x=>x.key!==k); draw();
+  });
+  // AD-12 3c: revoking a capability ENUMERATES the proposals it kills, before anything is signed.
+  // A revoke that silently left queued proposals live would not mean what the button says — the same
+  // defect as the rotate button this PR's predecessor disabled.
+  v.querySelectorAll('[data-revoke-cap]').forEach(b=>b.onclick=()=>{
+    const A=window.__nact?.actions; if(!A) return;
+    const row=S.actions.rows.find(r=>r.id===b.dataset.revokeCap); if(!row) return;
+    // The queue carries the granting identity's NAME; the grant carries its pubkey. Join on the
+    // pubkey — the whole point of ruling 1 — never on the name.
+    const toHex=window.__nact?.toHex || (x=>x);
+    const queue=S.queue.map(q=>({ id:q.id, label:q.klabel, granteePub: toHex(idOf(q.identity).npub||'') }));
+    const imp=A.revokeImpact(row, queue);
+    const list=imp.queued.length
+      ? `\n\nIt also drops ${imp.queued.length} queued proposal${imp.queued.length===1?'':'s'}:\n`
+        + imp.queued.map(q=>`  · ${q.label||q.id}`).join('\n')
+      : '\n\nNothing is queued under it right now.';
+    alert(`Revoking ${imp.grantLabel}.${list}\n\n${imp.limits}\n\n`
+      + 'Publishing a 441 from this console is not wired yet, so NOTHING WAS SIGNED. '
+      + 'Revoke it in the Nvoy Ledger, which signs a real 441 today.');
+  });
   v.querySelectorAll('[data-activate]').forEach(b=>b.onclick=async()=>{
     if(!LIVE){alert('Connect as a Director first.');return;}
     b.disabled=true;b.textContent='sign in your signer…';
@@ -898,6 +1132,10 @@ async function decideExternal(id,verb){
 // Boot. Draw IMMEDIATELY so the page is never blank — if the sign-in module
 // fails to load, you still get a readable (signed-out) control plane with a
 // clear reason, rather than an empty document.
+//
+// Honour a deep link before the first draw, so a cross-plane link lands on the tab it names instead
+// of flashing the default and then jumping.
+{ const k=tabFromHash(); if(k) tab=k; }
 draw();
 function boot(){
   window.__nact.titlebar.render('#titlebar', {
@@ -936,6 +1174,8 @@ import { nip07Signer, nip46Signer, nostrConnectSigner,
          serializeSession, parseSession } from 'nave-connect';
 import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
 import * as routing from 'nact-routing';
+import * as ACTIONS from 'nact-actions';
+import * as REGISTRY_LIB from 'nact-registry';
 import { SimplePool, nip19 } from 'nostr-tools';
 
 const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;height:100%">
@@ -1012,6 +1252,51 @@ window.__nact.npubOf = async function(signer){
 // the control plane renders real avatars / names / nip05 instead of bare pubkeys
 // — the same identity resolution Nvoy does. Best-effort: a slow or unreachable
 // relay never blocks the UI (raced against a timeout).
+// The durable-action-grant model, so the console and its tests share one implementation rather than
+// two descriptions of it — the same reason lib/tiers.mjs is shared with sign.html.
+window.__nact.actions = ACTIONS;
+// The divergence classifier, VENDORED from nvoy rather than restated — two planes describing one join
+// two ways is not one join (AD-11).
+window.__nact.registry = REGISTRY_LIB;
+
+// npub → lowercase hex. The join key is the hex pubkey everywhere (AD-12 ruling 1) and npub is
+// display only, so anything joining a queue row to a grant must convert rather than string-compare
+// two encodings of the same key — which is the shape of the bug ruling 1 exists to prevent.
+window.__nact.toHex = function(v){
+  const s=String(v||'');
+  if(/^[0-9a-f]{64}$/.test(s)) return s;
+  try{ const {type,data}=nip19.decode(s); return type==='npub'?data:'' }catch{ return '' }
+};
+
+/**
+ * Read public 440 grants addressed to these identities, plus the 441s that revoke them.
+ *
+ * Reports how many relays ANSWERED, because the caller must be able to tell an empty result from an
+ * unanswered one. A grant nobody could read is not a grant that does not exist.
+ */
+window.__nact.queryGrants = async function(npubs, ms=4000){
+  const hex=[]; for(const np of (npubs||[])){ try{ hex.push(np.startsWith('npub')?nip19.decode(np).data:np) }catch{} }
+  const RELAYS=['wss://relay.damus.io','wss://nos.lol','wss://relay.primal.net'];
+  const pool=new SimplePool();
+  let events=[], revocations=[], answered=0;
+  try{
+    const got=await Promise.race([
+      Promise.all([
+        pool.querySync(RELAYS,{kinds:[440],'#p':hex}),
+        pool.querySync(RELAYS,{kinds:[441]}),
+      ]),
+      new Promise(res=>setTimeout(()=>res(null),ms)),
+    ]);
+    if(got){ events=got[0]||[]; revocations=got[1]||[]; answered=RELAYS.length; }
+  }catch{}
+  try{ pool.close(RELAYS) }catch{}
+  // A 441 e-tags the 440 it kills. Collected as a Set so a revocation can never be missed by
+  // ordering, and so an unmatched 441 is simply inert rather than an error.
+  const revoked=new Set();
+  for(const r of revocations) for(const t of (r.tags||[])) if(t[0]==='e'&&t[1]) revoked.add(t[1]);
+  return { events, revoked, answered, total: RELAYS.length };
+};
+
 window.__nact.fetchProfiles = async function(npubs, ms=3000){
   const list=[...new Set((npubs||[]).filter(Boolean))];
   const hexToNpub={};

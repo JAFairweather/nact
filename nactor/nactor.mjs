@@ -34,6 +34,7 @@ import { loadSecret } from '../src/util/secret.mjs'
 import { webQueueApproval } from './webqueue.mjs'
 import { verifyNip98 } from './nip98.mjs'
 import { oauthAccessToken } from './oauth.mjs'
+import { registryView } from './registry-reader.mjs'
 import { startGrantReader, startEntitlementReader } from './grant-reader.mjs'
 import { ngageDelivery } from './ngage-delivery.mjs'
 import { approvalPathOf, healCovers } from '../lib/routing.mjs'
@@ -42,6 +43,11 @@ import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
 import { runMailVerb } from './connectors/mail.mjs'
 import { externalActionStore } from './external-actions.mjs'
+
+// The last roster projection this runtime read, or null-with-a-reason. Written by the grant reader's
+// sweep and read by /api/state. Deliberately NOT seeded to `[]`: before the first sweep the honest
+// answer is "not read yet", and an empty array would claim the Director's registry is empty.
+let REGISTRY = { agents: null, why: 'the first roster sweep has not completed yet' }
 
 const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
@@ -914,6 +920,9 @@ const server = createServer(async (req, res) => {
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
         externalActions: externalActions.listPending(),
         raised: ngage.listRaised(),                        // director-path drafts on his desk (nact#37)
+        // The delegator's projected agent roster, or null WITH a reason. Never [] on failure: an
+        // empty roster is an answer, and "could not read" is not one (see registry-reader.mjs).
+        registry: registryView(REGISTRY, { now: Math.floor(Date.now() / 1000) }),
         history: runtimeAudit(),
         entitlements: Object.fromEntries(idEntities().map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
       })
@@ -1023,7 +1032,7 @@ server.listen(PORT, () => {
   // service (NACT_MCP_URL) — which then custodies the nactor nsec — with
   // identical CREDS semantics and the same Director-publisher filter applied
   // via the grants' author fields. Default remains relay until cutover proves.
-  startGrantReader({ transport: GRANT_TRANSPORT, mcpUrl: MCP_URL, relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent })
+  startGrantReader({ transport: GRANT_TRANSPORT, mcpUrl: MCP_URL, relayUrls: RELAYS, nactorSk: NACTOR_SK, creds: CREDS, allowedPublishers: directorPubs, log: console.log, onEvent: recordGrantEvent, onRegistry: (r) => { REGISTRY = r } })
   // A1/A2 — read each runtime identity's OWN grants (with its own key) to build
   // the grant-derived entitlement map the broker gates on. Boot + every 5 min, so
   // a Director's new grant / revocation flows through; identities imported at
