@@ -80,6 +80,11 @@ section{padding:8px 0 40px}
 .ctx{color:var(--dim);font-size:13px;font-style:italic;margin-top:8px}
 .fp{font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:10px}
 .hint{font-size:12px;color:var(--dim);margin-top:2px}
+/* A group header inside a tab. The Queue needs one because it holds two approval paths and only
+   one of them can be completed here (AD-10) — an unlabelled run of cards would imply they are all
+   signable on this box. */
+.sect{font-size:14px;letter-spacing:.01em;margin:22px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.sect:first-child{margin-top:0}
 
 /* buttons */
 .acts{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
@@ -203,6 +208,12 @@ const S = {
   // approvals is the one thing a control plane must never do. Disconnected now
   // means empty, and every tab says so.
   queue: [],
+  // Director-path drafts sitting on the Ngage desk. /api/state has ALWAYS returned these
+  // (nactor.mjs:882) and mapState threw the field away, so every director-path proposal was
+  // invisible in the plane whose entire purpose is proposals. AD-10 forbids Nact SIGNING them —
+  // the key is not on this box — but it never forbade showing them. A queue may show what it
+  // cannot sign, as long as it says so and hands you the door.
+  raised: [],
   history: [],
 };
 let tab = 'queue';
@@ -226,6 +237,11 @@ function mapState(st){
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
+  // `raised` was fetched and discarded here. Mapped defensively: an entry with no scopeId is not
+  // addressable and is dropped rather than rendered as an unopenable card.
+  S.raised=(st.raised||[]).filter(r=>r&&r.scopeId).map(r=>({scopeId:r.scopeId,identity:r.identity||'—',
+    grantee:r.grantee||'',scopeName:r.scopeName||r.scopeId,text:r.text||'',
+    when:r.at?new Date(r.at).toLocaleString():'—',via:r.via||''}));
   S.history=(st.history||[]).map(h=>{const when=h.when?new Date(h.when).toLocaleString():'—';
     if(h.t==='activated')return {t:'activated',identity:h.identity,by:(h.by||'').slice(0,14),when};
     if(h.t==='grant-load'||h.t==='grant-update'||h.t==='grant-drop')return {t:h.t,credential:h.credential,generation:h.generation??null,when};
@@ -479,8 +495,33 @@ function draw(){
   renderTabs();
   const v=document.getElementById('view'); let h='';
   if(tab==='queue'){
-    h = S.queue.length ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
+    // Two sections, because there are two approval paths and only one of them ends on this box
+    // (AD-10). Ordering box-first is not cosmetic: the first section is the work you can finish
+    // here, the second is work you must finish elsewhere.
+    const boxSection = S.queue.length
+      ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
       : `<div class="empty">${LIVE?'Nothing awaiting approval. The agent will propose when it has something worth posting.':'Not connected — <b>Connect</b> as a Director to load your queue.'}</div>`;
+    // Showing what it cannot sign, and saying so. The alternative — which is what shipped — is
+    // that a director-path proposal exists, is known to this runtime, and appears nowhere.
+    const deskSection = S.raised.length ? `
+      <h2 class="sect">On your Ngage desk <span class="badge b-off">${S.raised.length}</span></h2>
+      <div class="muted" style="margin:0 0 12px">Your key is not on this box for these. Nactor raised
+        them to your desk and can show them, but <b>cannot sign them</b> — only your own hand can, which
+        is enforced by encryption, not by policy: each draft is gift-wrapped to your npub.</div>
+      <div class="grid">${S.raised.map(r=>`<div class="card">
+        <div class="row between">
+          <div><h3>${esc(r.scopeName)}</h3>
+            <div class="muted">raised by <b>${esc(r.identity)}</b> · ${esc(r.when)}${r.via?` · via ${esc(r.via)}`:''}</div></div>
+          <span class="badge b-off" title="this box holds no key for this identity">director path</span>
+        </div>
+        ${r.text?`<div class="kv" style="margin:12px 0 2px;white-space:pre-wrap">${esc(r.text.length>420?r.text.slice(0,420)+'…':r.text)}</div>`:''}
+        <div class="hint">scope ${esc(r.scopeId.slice(0,16))}… — the desk reads this draft from the grant, not from Nact.</div>
+        <div class="row" style="margin-top:10px">
+          <a class="btn" target="_blank" rel="noopener"
+             href="https://ngage.nave.pub/#draft/${encodeURIComponent(r.scopeId)}">Open on your Ngage desk ↗</a>
+        </div>
+      </div>`).join('')}</div>` : '';
+    h = (S.raised.length ? `<h2 class="sect">Awaiting your key here</h2>` : '') + boxSection + deskSection;
   }
   if(tab==='identities'){
     h=`<div class="muted" style="margin:0 0 14px">The nostr identities your agent may <b>act as</b> — each signs the events it proposes. Custodial keys live on the box (SOPS-encrypted); NIP-46 identities keep their key on your device. Wire them to approval channels in <b>Routing</b>.</div><div class="grid">${S.identities.map(i=>{
@@ -502,7 +543,16 @@ function draw(){
       <div class="chips">${(()=>{const cc=commsChannelFor(i.key);return cc
         ? `<span class="chip ${cc.status==='active'?'on':''}">💬 ${esc(cc.name)} · ${esc(chanShort(cc))}${cc.status!=='active'?' (severed)':''}</span>`
         : `<span class="chip warnchip">no comms channel yet — this agent has no telegram bot of its own</span>`;})()}</div>
-      <div class="acts">${LIVE&&!i.activated&&i.signer!=='director'?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}<button class="btn danger" data-revoke-id="${i.key}">${i.signer==='director'?'Remove identity':'Revoke authority (rotate key)'}</button></div></div>`;}).join('')}
+      <!-- Both of these were local-only with no API call behind either, while being labelled as
+           though they cut an agent off. "Remove identity" is renamed to what it does — a local-only
+           action must be NAMED local-only — and the rotate button is disabled with the route that
+           actually works today, because offering a revoke that revokes nothing is the most dangerous
+           button in the fleet: you would believe you had cut an agent off. -->
+      <div class="acts">${LIVE&&!i.activated&&i.signer!=='director'?`<button class="btn primary" data-activate="${i.key}">✍ Activate (sign)</button>`:''}${i.signer==='director'
+        ? `<button class="btn danger" data-revoke-id="${i.key}" title="removes this identity from this console's view only. It does not revoke any grant and does not touch any key.">Forget on this device</button>`
+        : `<button class="btn danger" disabled title="Rotating a key on the box is not yet possible from this console, and this button never did it. To cut this agent off now, revoke its grants in the Nvoy Ledger — that is a real revocation, by scope-key rotation.">Revoke authority (rotate key)</button>
+           <a class="btn" target="_blank" rel="noopener" href="https://nvoy.nave.pub/console/#agent/${esc(i.npub||'')}">Revoke its grants in Nvoy ↗</a>`
+      }</div></div>`;}).join('')}
       <div class="card" style="border-style:dashed">
         <h3 style="color:var(--accent-bright)">+ Add identity</h3>
         <div class="muted">Provide the metadata; the key is generated <b>on the box</b> and stored SOPS-encrypted — the browser never sees an nsec.</div>
@@ -510,7 +560,17 @@ function draw(){
           <label>Handle (NIP-05)</label><input id="ni-handle" placeholder="scout@nave.pub">
           <label>Display name</label><input id="ni-name" placeholder="Scout">
           <label>Signer</label>
-          <select id="ni-signer"><option value="custodial">custodial — key generated on the box (SOPS)</option><option value="bunker">NIP-46 bunker — key stays on your device</option><option value="director">Director-path (Ngage) — you approve &amp; sign; no key on the box</option></select>
+          <!-- Availability glyphs reuse the Routing board's legend, so the vocabulary is already
+               learned: ○ not wired · ✕ severed/unavailable. Director-path is the only one this
+               console can actually complete, so it is the default rather than the third option. -->
+          <select id="ni-signer">
+            <option value="director">Director-path (Ngage) — you approve &amp; sign; no key on the box</option>
+            <option value="custodial" disabled>✕ custodial — key generated on the box (SOPS): not provisionable here</option>
+            <option value="bunker" disabled>○ NIP-46 bunker — key stays on your device: not wired yet</option>
+          </select>
+          <div class="hint" id="ni-why">Only the Director path can be completed from a console. A custodial
+            key is generated on the box: add <b>&lt;NAME&gt;_NSEC</b> there and the identity appears here on the
+            next refresh. A bunker identity needs a handshake the box must confirm first.</div>
           <input id="ni-bunker" placeholder="bunker://… connection string" style="display:none">
           <input id="ni-npub" placeholder="npub1… — this identity's public key (you hold its secret)" style="display:none">
           <button class="btn primary" id="ni-create">Create identity</button>
@@ -732,10 +792,30 @@ function draw(){
       catch(e){ alert('Could not add identity: '+e.message); }
       return;
     }
-    // custodial / bunker: not yet wired to a runtime create endpoint — local only.
-    const fakeNpub='npub1'+Array.from({length:38},()=>'0123456789acdefghjklmnpqrstuvwxyz'[Math.floor(Math.random()*33)]).join('');
-    S.identities.push({key,handle,npub:fakeNpub,signer,status:'active'});
-    tab='identities';draw();
+    // NO FABRICATION. This is where the plane used to mint a random npub1… string and push it into
+    // local state as an active identity — no API call, nothing on the box, a key that does not exist
+    // rendered identically to one that does. Twenty lines above, this same file says "an approval
+    // queue that invents approvals is the one thing a control plane must never do." Inventing the
+    // IDENTITY is worse: every approval that identity ever appears to give is downstream of it.
+    //
+    // So the two unprovisionable paths refuse, and each states the route that does work. A refusal
+    // naming the workaround teaches; a fake success teaches the wrong thing and takes months to
+    // notice, because nothing ever contradicts it.
+    if(signer==='custodial'){
+      alert('Not provisionable from this console.\n\nA custodial key is generated on the box under SOPS, '
+        +'and this console has no endpoint that can do that — the runtime README says so too.\n\n'
+        +'Add '+key.toUpperCase()+'_NSEC on the box and this identity appears here on the next refresh, '
+        +'with its pubkey as its identity.\n\nNothing was created.');
+      return;
+    }
+    if(signer==='bunker'){
+      alert('Not yet wired.\n\nA NIP-46 identity keeps its key on your device, so the box must complete a '
+        +'bunker handshake before the identity is real. This console cannot confirm that handshake yet, and '
+        +'showing the identity before the box confirms it would be a claim it cannot back.\n\n'
+        +'Use Director-path (Ngage) if you hold the key yourself.\n\nNothing was created.');
+      return;
+    }
+    alert('Unknown signer type — nothing was created.');
   };
   // create channel
   // Ngage carries no on-box secret — hide the Secret field for that type.
