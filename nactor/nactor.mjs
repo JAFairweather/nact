@@ -26,7 +26,7 @@ import { createServer } from 'node:http'
 import { Readable } from 'node:stream'
 import { timingSafeEqual } from 'node:crypto'
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { getPublicKey, nip19, nip44 } from 'nostr-tools'
 import { Nact } from '../src/nact.mjs'
 import { kindInfo } from '../src/inspect.mjs'
@@ -42,6 +42,7 @@ import { McpGrantClient } from './mcp-grant-client.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
 import { runMailVerb } from './connectors/mail.mjs'
+import { externalActionStore } from './external-actions.mjs'
 
 // The last roster projection this runtime read, or null-with-a-reason. Written by the grant reader's
 // sweep and read by /api/state. Deliberately NOT seeded to `[]`: before the first sweep the honest
@@ -52,6 +53,7 @@ const PORT = Number(process.env.NACT_PORT || 8791)
 const RELAYS = (process.env.LUKE_RELAYS || 'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
   .split(',').map(s => s.trim()).filter(Boolean)
 const CONFIG_PATH = process.env.NACT_CONFIG || './nact-config.json'
+const EXTERNAL_ACTIONS_PATH = process.env.NACT_EXTERNAL_ACTIONS || resolve(dirname(CONFIG_PATH), 'nact-external-actions.json')
 
 function toPub(v) {
   const raw = (v || '').trim()
@@ -542,6 +544,7 @@ function saveConfig(c) {
   writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2))
 }
 let config = loadConfig()
+const externalActions = externalActionStore(EXTERNAL_ACTIONS_PATH)
 
 // ---- http ----------------------------------------------------------------
 const json = (res, code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
@@ -648,7 +651,8 @@ function derivedCommsChannels(existing) {
 }
 
 const server = createServer(async (req, res) => {
-  const path = (req.url || '/').split('?')[0]
+  const requestUrl = new URL(req.url || '/', 'http://nactor.local')
+  const path = requestUrl.pathname
   if (!path.startsWith('/api/')) return json(res, 404, { error: 'not found' })
 
   // Health is public and prints no secrets. Exposes the Nactor npub so a
@@ -668,6 +672,20 @@ const server = createServer(async (req, res) => {
       entitlements: Object.fromEntries(idEntities()
         .map(id => [id.name, [...(ENTITLEMENTS.get(id.pub) || [])]])),
     })
+  }
+
+  // The target approval event is itself the authentication for this one route. Requiring a
+  // second generic NIP-98 signature would turn one visible human decision into two signer taps.
+  // The event is accepted only when it names one extant proposal and is signed by a live Director.
+  if (path === '/api/decide-external' && req.method === 'POST') {
+    if (!directorPubs().size) return json(res, 503, { error: 'no Director configured' })
+    const raw = await readBody(req)
+    let decision
+    try { decision = JSON.parse(raw) } catch { return json(res, 400, { error: 'bad json' }) }
+    try {
+      const row = externalActions.decideExact(String(decision.instance || ''), String(decision.proposal_id || ''), decision.event, [...directorPubs()])
+      return json(res, 200, { ok: true, state: row.state, proposal_id: row.proposal.proposal_id, decision_id: row.decision.id })
+    } catch (e) { return json(res, Number.isInteger(e?.status) ? e.status : 400, { error: e?.message || 'decision refused' }) }
   }
 
   // --- Egress proxy (internal-only, token-gated) — see PROXY_PROVIDERS -------
@@ -725,6 +743,21 @@ const server = createServer(async (req, res) => {
   if (bodyRaw) { try { body = JSON.parse(bodyRaw) } catch { return json(res, 400, { error: 'bad json' }) } }
 
   try {
+    // An activated participant may place only an inert proposal under its authenticated pubkey.
+    // It cannot supply an approver, callback, signer, URL, or publication target.
+    if (path === '/api/propose-external' && req.method === 'POST') {
+      if (!activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not an activated identity' })
+      const row = externalActions.propose(body, pubkey)
+      return json(res, 200, { status: row.state, proposal_id: row.proposal.proposal_id,
+        fingerprint: row.proposal.fingerprint, approval_url: row.proposal.approval_url })
+    }
+    // Retrieval is caller-bound: even a Director uses the participant's authenticated runtime
+    // identity for this endpoint, so one agent cannot enumerate another agent's decisions.
+    if (path === '/api/external-approval' && req.method === 'POST') {
+      if (!activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not an activated identity' })
+      const out = externalActions.result(pubkey, String(body.proposal_id || ''))
+      return json(res, 200, out)
+    }
     // Broker — gated by Director OR an ACTIVATED identity (not the Director-only
     // gate below). Nactor holds the credential in RAM, injects it into the pinned
     // provider host, and streams the response back. The secret value is never
@@ -885,6 +918,7 @@ const server = createServer(async (req, res) => {
         channels: [...config.channels, ...derivedCommsChannels(config.channels)],
         tiers: config.tiers,
         queue: approval.listPending().map(p => ({ ...p, tier: config.tiers[p.draft.kind] || kindInfo(p.draft.kind).risk })),
+        externalActions: externalActions.listPending(),
         raised: ngage.listRaised(),                        // director-path drafts on his desk (nact#37)
         // The delegator's projected agent roster, or null WITH a reason. Never [] on failure: an
         // empty roster is an answer, and "could not read" is not one (see registry-reader.mjs).

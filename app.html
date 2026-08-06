@@ -220,6 +220,7 @@ const S = {
   // approvals is the one thing a control plane must never do. Disconnected now
   // means empty, and every tab says so.
   queue: [],
+  externalActions: [],
   // Director-path drafts sitting on the Ngage desk. /api/state has ALWAYS returned these
   // (nactor.mjs:882) and mapState threw the field away, so every director-path proposal was
   // invisible in the plane whose entire purpose is proposals. AD-10 forbids Nact SIGNING them —
@@ -253,6 +254,9 @@ function mapState(st){
   S.channels=st.channels||[];
   S.policy=Object.entries(st.tiers||{}).sort((a,b)=>a[0]-b[0]).map(([k,t])=>({kind:+k,label:KLBL[+k]||('kind '+k),tier:t}));
   S.queue=(st.queue||[]).map(q=>({id:q.id,identity:q.identity,kind:q.draft.kind,klabel:(q.report&&q.report.kindLabel)||('kind '+q.draft.kind),tier:q.tier,content:q.draft.content,tags:q.draft.tags||[],ctx:q.context||'',fp:(q.fingerprint||'').slice(0,16),warns:(q.report&&q.report.warnings)||[]}));
+  S.externalActions=(st.externalActions||[]).map(p=>({proposalId:p.proposal_id,instance:p.instance,participant:p.participant,
+    fingerprint:p.fingerprint,action:p.action,content:p.content,recipient:p.recipient,ctx:p.context||'',approvalUrl:p.approval_url,
+    expiresAt:p.expires_at_ms}));
   // The delegator's projected roster. `agents: null` is PRESERVED as null: mapping it to [] would turn
   // "could not read" into "Nvoy knows nobody", which is the exact conflation the divergence rows exist
   // to prevent.
@@ -432,7 +436,13 @@ async function signOut(){
   try{ window.__nact.forget(); }catch{}
   // Drop everything the runtime gave us — signed out must look exactly like
   // never-connected, not like a stale snapshot of someone's real queue.
-  S.director=null; S.directors=[]; S.identities=[]; S.channels=[]; S.queue=[]; S.history=[]; S.profiles={};
+  S.director=null; S.directors=[]; S.identities=[]; S.channels=[]; S.queue=[]; S.externalActions=[]; S.history=[]; S.profiles={};
+  // Everything this wave added resets too. `raised` and `actions` clear to their empty/unread shapes,
+  // and `registry` clears to null-with-a-reason rather than [] — signed out must not read as "Nvoy
+  // knows nobody", which is the same conflation the divergence rows exist to prevent.
+  S.raised=[]; S.actions={ state:'unread', rows:[], dropped:0, relays:'' };
+  S.registry={ agents:null, generatedAt:null, generation:null, stale:null, dropped:0,
+    why:'not connected — nothing was read, so the roster is unknown rather than empty' };
   const b=document.getElementById('banner');
   b.innerHTML='Not connected — nothing is loaded. <b>Connect</b> as a Director to reach Nactor (the live Nact runtime) behind the NIP-98 gate: a browser extension, or a remote signer (<b>bunker://</b>, e.g. nsec.app on iPhone). Your key never enters this page.';
   b.style.borderColor=''; b.style.color='';
@@ -514,7 +524,7 @@ function showLogin(){
 //
 // BADGE LAW: a count badge means a human decision is waiting. Nothing else may carry one.
 const TAB_DEFS = [
-  ['queue', 'Queue', () => S.queue.length + S.raised.length],
+  ['queue', 'Queue', () => S.queue.length + S.raised.length + S.externalActions.length],
   ['identities', 'Agents'],
   ['actions', 'Actions'],
   ['routing', 'Routing'],
@@ -571,6 +581,21 @@ function proposalCard(p){
     <div class="acts">${acts}</div>
   </div>`;
 }
+function externalActionCard(p){
+  const left=Math.max(0,Math.ceil((p.expiresAt-Date.now())/60000));
+  return `<div class="card prop">
+    <div class="row between"><div><h3>Reply as ${esc(p.instance)}</h3>
+      <div class="kv">participant ${esc(p.participant.slice(0,16))}… · expires in ${left} min</div></div><span class="badge b-elev">external actuator</span></div>
+    <div class="action">
+      <div class="klabel">Private NIP-17 reply to ${esc(p.recipient||'receipt-bound recipient')}</div>
+      <div class="content">${revealContent(p.content)}</div>
+      <div class="fp">seal id ${esc(p.fingerprint)} — these are the exact participant-authored bytes the signer must return</div>
+    </div>
+    <div class="ctx">context (not published): ${esc(p.ctx)}</div>
+    <div class="hint">Your one signature approves only this proposal ID and seal fingerprint. Nact never receives the participant key and cannot publish the reply itself.</div>
+    <div class="acts"><button class="btn primary" data-ext-ok="${p.proposalId}">✅ Approve exact reply</button><button class="btn ghost" data-ext-no="${p.proposalId}">Reject</button></div>
+  </div>`;
+}
 function draw(){
   if(!LIVE){ showLogin(); return; }
   const tabs=document.getElementById('tabs'), banner=document.getElementById('banner');
@@ -581,8 +606,8 @@ function draw(){
     // Two sections, because there are two approval paths and only one of them ends on this box
     // (AD-10). Ordering box-first is not cosmetic: the first section is the work you can finish
     // here, the second is work you must finish elsewhere.
-    const boxSection = S.queue.length
-      ? `<div class="grid">${S.queue.map(proposalCard).join('')}</div>`
+    const boxSection = S.queue.length||S.externalActions.length
+      ? `<div class="grid">${S.externalActions.map(externalActionCard).join('')}${S.queue.map(proposalCard).join('')}</div>`
       : `<div class="empty">${LIVE?'Nothing awaiting approval. The agent will propose when it has something worth posting.':'Not connected — <b>Connect</b> as a Director to load your queue.'}</div>`;
     // Showing what it cannot sign, and saying so. The alternative — which is what shipped — is
     // that a director-path proposal exists, is known to this runtime, and appears nowhere.
@@ -953,6 +978,8 @@ function draw(){
     decide(b.dataset.ok,'enacted',p&&p.tier==='critical');
   });
   v.querySelectorAll('[data-no]').forEach(b=>b.onclick=()=>decide(b.dataset.no,'rejected'));
+  v.querySelectorAll('[data-ext-ok]').forEach(b=>b.onclick=()=>decideExternal(b.dataset.extOk,'approve'));
+  v.querySelectorAll('[data-ext-no]').forEach(b=>b.onclick=()=>decideExternal(b.dataset.extNo,'reject'));
   // "Forget on this device" is local-only, so it must not render as a revocation — marking the row
   // `revoked` claimed an authority change that never happened. It drops the row from this view and
   // says so; the next refresh brings it back, because the box is the authority, not this page.
@@ -1088,6 +1115,19 @@ async function decide(id,outcome,confirm){
   const p=S.queue.splice(i,1)[0];
   S.history.unshift({id:p.id,identity:p.identity,klabel:p.klabel,outcome,fp:p.fp.slice(0,4)+'…'+p.fp.slice(-2),when:'just now',relays:outcome==='enacted'?3:0});
   draw();
+}
+async function decideExternal(id,verb){
+  const p=S.externalActions.find(row=>row.proposalId===id); if(!p)return;
+  if(!SIGNER){alert('Connect as a Director first.');return;}
+  const canonical=JSON.stringify({proposal_id:p.proposalId,fingerprint:p.fingerprint,verb});
+  try{
+    const event=await SIGNER.signEvent({kind:27235,created_at:Math.floor(Date.now()/1000),content:'',tags:[
+      ['u',p.approvalUrl],['method','POST'],['payload',await sha256hex(canonical)]
+    ]});
+    const r=await fetch('/api/decide-external',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({instance:p.instance,proposal_id:p.proposalId,event})});
+    if(!r.ok){const out=await r.json().catch(()=>({}));throw new Error(out.error||('/api/decide-external → '+r.status));}
+    await refresh();
+  }catch(e){alert('external decision failed: '+e.message);}
 }
 // Boot. Draw IMMEDIATELY so the page is never blank — if the sign-in module
 // fails to load, you still get a readable (signed-out) control plane with a
