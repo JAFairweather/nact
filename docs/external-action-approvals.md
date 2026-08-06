@@ -17,7 +17,7 @@ never publishes their replies.
 4. Nact verifies the closed event schema, Director key, freshness, URL, method, payload hash, event
    ID, and signature, then fsyncs the exact signed event. It stores no unsigned approval boolean.
 5. The same activated participant retrieves only its own result through
-   `GET /api/external-approval?proposal_id=…`. The external runtime independently verifies the
+   body-bound `POST /api/external-approval` with `{proposal_id}`. The external runtime independently verifies the
    Director signature and fingerprint immediately before opening its signer.
 
 Proposal ID reuse with different bytes, cross-participant collisions, foreign/stale/future

@@ -58,7 +58,7 @@ t('expired proposal cannot be decided', () => {
 t('runtime routes keep submission/retrieval participant-bound and decisions Director-signed', () => {
   const source = readFileSync(join(process.cwd(), 'nactor', 'nactor.mjs'), 'utf8')
   assert.match(source, /path === '\/api\/propose-external'[\s\S]*activatedPubs\(\)\.has\(pubkey\)[\s\S]*externalActions\.propose\(body, pubkey\)/)
-  assert.match(source, /path === '\/api\/external-approval'[\s\S]*externalActions\.result\(pubkey/)
+  assert.match(source, /path === '\/api\/external-approval' && req\.method === 'POST'[\s\S]*externalActions\.result\(pubkey, String\(body\.proposal_id/)
   assert.match(source, /path === '\/api\/decide-external'[\s\S]*externalActions\.decideExact[\s\S]*directorPubs/)
 })
 

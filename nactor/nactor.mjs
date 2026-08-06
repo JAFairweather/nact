@@ -747,9 +747,9 @@ const server = createServer(async (req, res) => {
     }
     // Retrieval is caller-bound: even a Director uses the participant's authenticated runtime
     // identity for this endpoint, so one agent cannot enumerate another agent's decisions.
-    if (path === '/api/external-approval' && req.method === 'GET') {
+    if (path === '/api/external-approval' && req.method === 'POST') {
       if (!activatedPubs().has(pubkey)) return json(res, 403, { error: 'caller is not an activated identity' })
-      const out = externalActions.result(pubkey, String(requestUrl.searchParams.get('proposal_id') || ''))
+      const out = externalActions.result(pubkey, String(body.proposal_id || ''))
       return json(res, 200, out)
     }
     // Broker — gated by Director OR an ACTIVATED identity (not the Director-only
