@@ -1139,7 +1139,10 @@ async function decideExternal(id,verb){
 draw();
 function boot(){
   window.__nact.titlebar.render('#titlebar', {
-    appName: 'Nact', tagline: 'control plane', sealSvg: window.__nact.titlebar.seal,
+    // The tagline is the VERB, per the plan: this plane answers what your agents may DO. `control plane`
+    // described the software; it did not tell a reader which of two planes they were on.
+    appName: 'Nact', tagline: 'what your agents may do', sealSvg: window.__nact.titlebar.seal,
+    planes: window.__nact.titlebar.planes, activePlane: 'nact',
     npub: null, onSignIn: goLive, signInLabel: '\u25c9 Connect',
   });
   // A remembered session resumes in the background — a reload shouldn't cost
@@ -1172,7 +1175,7 @@ else {
 <script type="module">
 import { nip07Signer, nip46Signer, nostrConnectSigner,
          serializeSession, parseSession } from 'nave-connect';
-import { renderTitlebar, updateTitlebar } from 'nave-titlebar';
+import { renderTitlebar, updateTitlebar, NAVE_PLANES } from 'nave-titlebar';
 import * as routing from 'nact-routing';
 import * as ACTIONS from 'nact-actions';
 import * as REGISTRY_LIB from 'nact-registry';
@@ -1190,7 +1193,7 @@ const SEAL = `<svg viewBox="0 0 100 100" aria-hidden="true" style="width:100%;he
 const REMEMBER = 'nact.session';   // same `remember` slot shape the other apps use
 
 window.__nact = window.__nact || {};
-window.__nact.titlebar = { render: renderTitlebar, update: updateTitlebar, seal: SEAL };
+window.__nact.titlebar = { render: renderTitlebar, update: updateTitlebar, seal: SEAL, planes: NAVE_PLANES };
 window.__nact.routing = routing;   // the AD-10 approval-path model (tested in lib/routing.test.mjs)
 
 // The three sign-in methods, all returning nave-connect's uniform signer shape
