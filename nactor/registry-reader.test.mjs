@@ -22,8 +22,27 @@ const t = async (name, fn) => {
 }
 
 const A = 'a'.repeat(64), B = 'b'.repeat(64), C = 'c'.repeat(64)
-const grant = { d: REGISTRY_SCOPE, author_npub: 'npub1director' }
-const clientReturning = (data, generation = 3) => ({ readScope: async () => ({ data, generation }) })
+
+// THE FIXTURE IS THE FIX. This suite used to set `{ d: REGISTRY_SCOPE }` and mock `readScope` as
+// `async () => (…)` — a stub that ignores its arguments. Between them, those two lines let the reader
+// match on the wrong field AND dereference by the wrong value, and pinned the mistake as the expected
+// contract. Both halves of the join passed their own suites and could never have worked together,
+// because each mocked the other side to its own assumption.
+//
+// So: the grant now has the shape nvoy's `grantSummary` actually emits — an OPAQUE `d`, distinct from
+// `scope_name` — and the mock ASSERTS what it was called with. A stub that accepts anything verifies
+// nothing.
+const SCOPE_ID = 'kx7m2q'                        // opaque, as every nvoy scope id is
+const grant = { d: SCOPE_ID, scope_name: REGISTRY_SCOPE, author_npub: 'npub1director', status: 'active' }
+const clientReturning = (data, generation = 3) => ({
+  readScope: async (d, authorNpub) => {
+    assert.equal(d, SCOPE_ID,
+      'the reader must dereference the scope ID from the grant, not the scope NAME — nvoy publishes '
+      + 'under an opaque `d` on purpose, and reading by name finds nothing')
+    assert.equal(authorNpub, grant.author_npub, 'the roster must be read from the granting delegator')
+    return { data, generation }
+  },
+})
 
 // ── every failure is null WITH a reason, never [] ────────────────────────────
 await t('no MCP client → null, and says there is no path', async () => {
@@ -37,6 +56,52 @@ await t('no grant on the scope → null, and names the missing grant', async () 
   assert.match(r.why, new RegExp(REGISTRY_SCOPE.replace('/', '\\/')))
   assert.match(r.why, /has not granted this runtime read/)
 })
+// ── the join seam: match on the NAME, dereference by the ID ─────────────────
+await t('THE BUG: a grant identified only by `d === REGISTRY_SCOPE` is NOT a match', async () => {
+  // This is the exact shape the old reader looked for, and the shape nvoy will never publish, because
+  // a semantic `d` tag leaks that this pubkey maintains an agent roster. Matching it would mean the
+  // only projection this runtime can read is one that already leaked.
+  const r = await readRegistry({
+    client: clientReturning({ v: 1, agents: [{ pub: A }] }),
+    grants: [{ d: REGISTRY_SCOPE, author_npub: 'npub1director', status: 'active' }],
+  })
+  assert.equal(r.agents, null, 'matched a scope name in the `d` field')
+  assert.match(r.why, /has not granted this runtime read/)
+})
+await t('the roster is dereferenced by the opaque scope id, and the mock proves it', async () => {
+  // The assertions live in clientReturning: called with the NAME, this test fails.
+  const r = await readRegistry({ client: clientReturning({ v: 1, agents: [{ pub: A }] }), grants: [grant] })
+  assert.deepEqual(r.agents, [A])
+})
+await t('a REVOKED grant reads differently from a missing one', async () => {
+  // Rotation-based revocation leaves the grantee's row visible, so this is reachable in normal
+  // operation. "never granted" sends an operator to Nvoy to grant it; "revoked" tells them it was taken
+  // away. One sentence for both would send them to do the wrong thing.
+  const r = await readRegistry({
+    client: clientReturning({ v: 1, agents: [{ pub: A }] }),
+    grants: [{ ...grant, status: 'revoked' }],
+  })
+  assert.equal(r.agents, null)
+  assert.match(r.why, /not active/)
+  assert.doesNotMatch(r.why, /has not granted this runtime read/,
+    'a revoked grant must not be reported as one that was never issued')
+})
+await t('an active grant is preferred over a stale one for the same scope', async () => {
+  const r = await readRegistry({
+    client: clientReturning({ v: 1, agents: [{ pub: B }] }),
+    grants: [{ ...grant, d: 'old000', status: 'revoked' }, grant],
+  })
+  assert.deepEqual(r.agents, [B], 'the reader did not pick the active grant')
+})
+await t('a grant with no scope id → null, rather than dereferencing undefined', async () => {
+  const r = await readRegistry({
+    client: clientReturning({ v: 1, agents: [{ pub: A }] }),
+    grants: [{ scope_name: REGISTRY_SCOPE, author_npub: 'npub1director', status: 'active' }],
+  })
+  assert.equal(r.agents, null)
+  assert.match(r.why, /no scope id/)
+})
+
 await t('a read that throws → null, and surfaces the transport error', async () => {
   const r = await readRegistry({ client: { readScope: async () => { throw new Error('relay down') } }, grants: [grant] })
   assert.equal(r.agents, null)

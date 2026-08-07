@@ -24,25 +24,54 @@ const HEX64 = /^[0-9a-f]{64}$/
 /**
  * Pull the projection through the MCP grant client.
  *
+ * NAME VS ID, AND WHY THIS IS NOT A COSMETIC DISTINCTION. A grant carries both: `scope_name` is what
+ * the scope IS (`data:agents/registry`), and `d` is the scope ID it lives under on the relay. They are
+ * deliberately different values. nvoy publishes every scope under an OPAQUE `d` — its own rule, in
+ * `console/nvoygrant.mjs`: "semantic names in `d` tags leak disclosure structure" — because a relay
+ * that sees `d: data:agents/registry` on a Director's 30440 learns that this pubkey maintains an agent
+ * roster and, from the generation churn, how often it changes. The contents stay encrypted; the fact
+ * of it would not. `scope_name` travels inside the gift-wrapped grant, so only the grantee sees it,
+ * which is the whole point of putting it there.
+ *
+ * This reader previously matched `x.d === REGISTRY_SCOPE` and then read BY THAT NAME. Both were wrong
+ * in the same direction: it could only ever have found a projection published under a semantic `d` —
+ * that is, one that had already leaked. Its sibling `grant-reader.mjs` had it right all along
+ * (`client.readScope(g.d, …)`). So: match on the name, read by the id. Refusing to match on `d` is a
+ * feature, not strictness — the shape it would accept is the shape that must not exist.
+ *
  * @param client       the nvoy MCP client (readScope(d, authorNpub, {maxAge}))
  * @param grants       the grants this runtime holds, as grant-reader sees them:
- *                     [{ d, author_npub, ... }]
+ *                     [{ d, scope_name, author_npub, status, ... }]
  * @returns { agents: string[]|null, generatedAt, generation, why }
  */
 export async function readRegistry({ client, grants = [], log = () => {} } = {}) {
   const no = (why) => ({ agents: null, generatedAt: null, generation: null, why })
 
   if (!client) return no('no MCP client — this runtime has no path to the delegator\'s scopes')
-  const g = (Array.isArray(grants) ? grants : []).find(x => x && x.d === REGISTRY_SCOPE)
-  if (!g) {
+
+  const held = (Array.isArray(grants) ? grants : []).filter(x => x && x.scope_name === REGISTRY_SCOPE)
+  if (!held.length) {
     return no(`no grant on ${REGISTRY_SCOPE} — the Director has not granted this runtime read on the `
       + 'roster, so whether Nvoy knows a given key cannot be checked from here')
+  }
+
+  // A revoked grant is not a missing one, and the two must not print the same sentence: "never granted"
+  // sends you to Nvoy to grant it, "revoked" tells you it was taken away. Rotation-based revocation
+  // leaves the old row visible to the grantee, so this case is reachable in normal operation.
+  const g = held.find(x => x.status === 'active') ?? null
+  if (!g) {
+    const states = [...new Set(held.map(x => x.status || 'unknown'))].join(', ')
+    return no(`the grant on ${REGISTRY_SCOPE} is ${states}, not active — this runtime held read on the `
+      + 'roster and no longer does, which is not the same as never having been granted it')
+  }
+  if (typeof g.d !== 'string' || !g.d) {
+    return no(`the grant on ${REGISTRY_SCOPE} carries no scope id, so there is nothing to dereference`)
   }
 
   let res
   // maxAge 0: read it LIVE. A cached roster would let a revoked agent keep reading as registered,
   // which is the same class of staleness the Ledger's hard-expiry banner warns about.
-  try { res = await client.readScope(REGISTRY_SCOPE, g.author_npub, { maxAge: 0 }) }
+  try { res = await client.readScope(g.d, g.author_npub, { maxAge: 0 }) }
   catch (e) { return no(`could not read ${REGISTRY_SCOPE}: ${e?.message || e}`) }
 
   const payload = res?.data ?? res
