@@ -46,8 +46,10 @@ import { receiveGrants, latestGrants, fetchScope } from './lib/nipxx.mjs'
 import { LiveRelay } from './lib/liverelay.mjs'
 import { McpGrantClient, McpToolError } from './mcp-grant-client.mjs'
 import { readRegistry } from './registry-reader.mjs'
+import { BINDING_SCOPE, verifiedChannelOf } from '../lib/channel-binding.mjs'
 
 export const CREDENTIAL_PREFIX = 'credential:'
+export const CHANNEL_BINDING_PREFIX = BINDING_SCOPE
 
 // Names of credentials still riding the bootstrap-env fallback (the tier the
 // migration drains): source 'bootstrap-env' or 'bootstrap-env-parts'. A
@@ -62,6 +64,93 @@ const publisherSet = (allowed) => {
   const v = typeof allowed === 'function' ? allowed() : allowed
   if (!v) return null
   return v instanceof Set ? v : new Set(v)
+}
+
+// Read the live channel-binding grants addressed to this Nactor.  This is
+// deliberately separate from credential loading: a binding is authority for
+// an approval transport, not a secret, and its absence after a successful
+// read is the revocation signal.  A failed whole-relay read is UNKNOWN, never
+// an empty set; callers must fail closed while retaining the last known set for
+// diagnostics only.
+export async function syncChannelBindings({ relay, relayUrls, nactorSk, bindings, allowedPublishers, log = () => {}, onEvent = () => {} }) {
+  const own = relay || new LiveRelay(relayUrls)
+  const owned = !relay
+  const summary = { channels: [], loaded: [], dropped: [], stale: [], errors: [], untrusted: 0, available: false }
+  try {
+    const trusted = publisherSet(allowedPublishers)
+    let grants = latestGrants(await receiveGrants(own, nactorSk))
+      .filter(g => (g.scopeName || '') === BINDING_SCOPE)
+    if (trusted) {
+      const before = grants.length
+      grants = grants.filter(g => trusted.has(g.publisher))
+      summary.untrusted = before - grants.length
+    }
+    grants.sort((a, b) => (a.issuedAt || 0) - (b.issuedAt || 0))
+    const next = new Set()
+    for (const g of grants) {
+      const s = await fetchScope(own, g)
+      if (s.status !== 'ok') {
+        summary.stale.push(g.scopeId || g.id || 'binding')
+        continue
+      }
+      let payload = s.data
+      if (typeof payload === 'string') {
+        try { payload = JSON.parse(payload) } catch { payload = null }
+      }
+      const channel = verifiedChannelOf(payload)
+      if (!channel) { summary.errors.push('binding scope carried no valid channel'); continue }
+      next.add(channel)
+    }
+    summary.available = true
+    summary.channels = [...next].sort()
+    for (const channel of next) {
+      if (!bindings.has(channel)) {
+        summary.loaded.push(channel)
+        onEvent({ t: 'channel-bind', channel, when: Date.now() })
+      }
+    }
+    for (const channel of bindings) {
+      if (!next.has(channel)) {
+        summary.dropped.push(channel)
+        onEvent({ t: 'channel-unbind', channel, when: Date.now() })
+      }
+    }
+    bindings.clear()
+    for (const channel of next) bindings.add(channel)
+  } catch (e) {
+    summary.errors.push(e?.message || String(e))
+    summary.channels = [...bindings].sort()
+  } finally {
+    if (owned) try { own.close() } catch {}
+  }
+  if (summary.loaded.length || summary.dropped.length || summary.errors.length || summary.untrusted) {
+    log(`  channel-bindings: ${summary.available ? 'available' : 'UNKNOWN'} · active [${summary.channels.join(', ') || '—'}]`
+      + (summary.loaded.length ? ` · added [${summary.loaded.join(', ')}]` : '')
+      + (summary.dropped.length ? ` · removed [${summary.dropped.join(', ')}]` : '')
+      + (summary.untrusted ? ` · ignored ${summary.untrusted} non-Director grant(s)` : '')
+      + (summary.errors.length ? ` · errors: ${summary.errors.join('; ')}` : ''))
+  }
+  return summary
+}
+
+// Periodic live source for telegramApproval({ verified }).  `onState` receives
+// { available, channels }; the adapter should honor only when available is
+// true.  This avoids turning a relay outage into either accidental authority
+// or an indistinguishable empty/revoked state.
+export function startChannelBindingReader({ relayUrls, nactorSk, bindings = new Set(), allowedPublishers, intervalMs = 5 * 60 * 1000, log = () => {}, onEvent = () => {}, onState = () => {} }) {
+  if (!nactorSk || !relayUrls?.length) {
+    log('  channel-bindings: reader disabled (no nactor key / relays)')
+    onState({ available: false, channels: new Set() })
+    return { bindings, stop() {} }
+  }
+  let available = false
+  const sweep = () => syncChannelBindings({ relayUrls, nactorSk, bindings, allowedPublishers, log, onEvent })
+    .then(s => { available = s.available; onState({ available, channels: new Set(bindings) }) })
+    .catch(e => { available = false; onState({ available, channels: new Set(bindings) }); log(`  channel-bindings: sweep error ${e?.message || e}`) })
+  sweep()
+  const t = setInterval(sweep, intervalMs)
+  if (t.unref) t.unref()
+  return { bindings, stop() { clearInterval(t); available = false; onState({ available, channels: new Set(bindings) }) } }
 }
 
 // Sweep once. Pass EITHER a ready `relay` (any {query,publish,close}) — used by
