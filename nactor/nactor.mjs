@@ -43,6 +43,7 @@ import { LiveRelay } from './lib/liverelay.mjs'
 import { publishEndpointAdvert } from './endpoint-advert.mjs'
 import { runMailVerb } from './connectors/mail.mjs'
 import { externalActionStore } from './external-actions.mjs'
+import { openaiProvider } from './provider-openai.mjs'
 
 // The last roster projection this runtime read, or null-with-a-reason. Written by the grant reader's
 // sweep and read by /api/state. Deliberately NOT seeded to `[]`: before the first sweep the honest
@@ -260,6 +261,9 @@ const BROKER_PROVIDERS = {
       return { url: base + p, headers: { 'x-api-key': cred, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     },
   },
+  // OpenAI: POST /v1/chat/completions only (provider-openai.mjs). The key arrives by grant only: no env
+  // fallback names it.
+  openai: openaiProvider,
   // The Nact-Approvals bot — owned by Nact_jaf. Named to match its owner (like
   // telegram-luke is Luke's), so the credential a Director grants reads clearly.
   'telegram-nactjaf': {
