@@ -14,15 +14,15 @@ assert.equal(openaiProvider.credential, 'openai')
 let t = build({ path: '/v1/chat/completions', method: 'POST', body: { model: 'm' } })
 assert.equal(t.url, 'https://api.openai.com/v1/chat/completions')
 assert.deepEqual(t.headers, { authorization: `Bearer ${CRED}`, 'content-type': 'application/json' })
-assert.equal(build({ path: '/v1/responses' }).url, 'https://api.openai.com/v1/responses', 'method defaults to POST')
+assert.equal(build({ path: '/v1/chat/completions' }).url, 'https://api.openai.com/v1/chat/completions', 'method defaults to POST')
 
 // 3. every other path is refused: the key reaches more than text generation, the broker does not
-for (const p of ['', '/v1/', '/v1/files', '/v1/images/generations', '/v1/fine_tuning/jobs', '/v1/organization/admin_api_keys',
+for (const p of ['', '/v1/', '/v1/responses', '/v1/files', '/v1/images/generations', '/v1/fine_tuning/jobs', '/v1/organization/admin_api_keys',
   '/v1/chat/completions/../files', '/v1/chat/completions?x=1', '/v1/chat/completions/abc', '//evil.example/v1/chat/completions',
   '@evil.example/v1/chat/completions', 'https://evil.example/v1/chat/completions']) {
   assert.throws(() => build({ path: p }), /not permitted for openai/, `path refused: ${p}`)
 }
-assert.deepEqual(OPENAI_PATHS, ['/v1/chat/completions', '/v1/responses'])
+assert.deepEqual(OPENAI_PATHS, ['/v1/chat/completions'])
 
 // 4. only POST: no listing or deleting stored completions through the broker
 for (const m of ['GET', 'DELETE', 'PUT', 'PATCH', 'get']) {
@@ -41,8 +41,10 @@ const nactor = readFileSync(new URL('./nactor.mjs', import.meta.url), 'utf8')
 assert.match(nactor, /import \{ openaiProvider \} from '\.\/provider-openai\.mjs'/)
 assert.match(nactor, /^  openai: openaiProvider,$/m)
 // 7. no key can arrive by env: openai is grant-only (not in the boot-time env fallback table)
-const boot = nactor.slice(nactor.indexOf('const BOOTSTRAP_CRED_ENV'), nactor.indexOf('}', nactor.indexOf('const BOOTSTRAP_CRED_ENV')))
-assert.ok(boot.length > 0 && !/openai/i.test(boot), 'openai is not in BOOTSTRAP_CRED_ENV')
+//    (the table may grow to several lines: take everything from its name to the loop that reads it)
+const bootAt = nactor.indexOf('const BOOTSTRAP_CRED_ENV'), bootEnd = nactor.indexOf('Object.entries(BOOTSTRAP_CRED_ENV)')
+assert.ok(bootAt > 0 && bootEnd > bootAt, 'found the env fallback table')
+assert.ok(!/openai/i.test(nactor.slice(bootAt, bootEnd)), 'openai is not in BOOTSTRAP_CRED_ENV')
 assert.match(readFileSync(new URL('../package.json', import.meta.url), 'utf8'), /node nactor\/provider-openai\.test\.mjs/)
 
 console.log('provider-openai.test.mjs: all pass')

@@ -2,11 +2,16 @@
 //
 // Narrower than the anthropic entry on purpose. An OpenAI key reaches far more than text generation (files,
 // fine-tuning, images, key and project admin on some key types), and the caller picks the path and the method. So
-// the broker forwards only text-generation calls, POST only, to the pinned host. A consumer that needs another
-// endpoint adds it here, in review, not in its request.
+// the broker forwards one call only: POST /v1/chat/completions, to the pinned host. /v1/responses is left out
+// deliberately: its body can ask for server-side tools (an MCP server of the caller's choosing, file search over
+// the account's stores, code execution, image generation) and can read stored responses by id. A consumer that
+// needs another endpoint adds it here, in review, not in its request.
+//
+// This limits what the key can be used FOR. Who may use it is the broker's ownership rule, not this file: grant
+// credential:openai to the one identity that should call it, or any activated identity can.
 //
 // Its own module so the rule can be tested without starting the broker (provider-openai.test.mjs).
-export const OPENAI_PATHS = ['/v1/chat/completions', '/v1/responses']
+export const OPENAI_PATHS = ['/v1/chat/completions']
 
 export const openaiProvider = {
   credential: 'openai',

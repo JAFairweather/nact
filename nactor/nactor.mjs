@@ -261,7 +261,8 @@ const BROKER_PROVIDERS = {
       return { url: base + p, headers: { 'x-api-key': cred, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' } }
     },
   },
-  // OpenAI text generation only, POST only (provider-openai.mjs). Grant-only: no env fallback names it.
+  // OpenAI: POST /v1/chat/completions only (provider-openai.mjs). The key arrives by grant only: no env
+  // fallback names it.
   openai: openaiProvider,
   // The Nact-Approvals bot — owned by Nact_jaf. Named to match its owner (like
   // telegram-luke is Luke's), so the credential a Director grants reads clearly.
